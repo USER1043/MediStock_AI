@@ -38,6 +38,12 @@ A clinical-grade, full-stack pharmacy inventory and management system built with
 
 ---
 
+## Documentation
+
+Developer documentation lives in [`docs/`](docs/README.md): architecture and diagrams, core business flows, backend and frontend structure, data model, security, forecasting, the chatbot, the API reference, setup and deployment, and the architecture decision records. Start with [`docs/architecture.md`](docs/architecture.md).
+
+---
+
 ## Getting Started
 
 ### Prerequisites
@@ -48,8 +54,8 @@ A clinical-grade, full-stack pharmacy inventory and management system built with
 
 1. **Clone and Install Dependencies:**
    ```bash
-   git clone https://github.com/kanishmanickam/Fullstack_Pharma_project.git
-   cd Fullstack_Pharma_project
+   git clone https://github.com/USER1043/MediStock_AI.git
+   cd MediStock_AI
    npm install
    cd server && npm install
    ```
@@ -71,6 +77,7 @@ A clinical-grade, full-stack pharmacy inventory and management system built with
      NODE_ENV=development
      MONGODB_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/medistock
      JWT_SECRET=your_jwt_secret_key
+     FRONTEND_URL=http://localhost:5173   # required: comma-separated CORS allow-list
      
      # Secure AI Integrations
      GEMINI_API_KEY=your_google_gemini_api_key
