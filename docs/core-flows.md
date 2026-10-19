@@ -23,17 +23,29 @@ sequenceDiagram
     S->>UI: Confirm bill (payment method)
     UI->>API: POST /api/billing {customerId?, customerName, items[], paymentMethod}
 
+    opt replica set / sharded / load-balanced topology
+        API->>DB: startSession(), startTransaction()
+    end
+
     loop each item
         API->>DB: Medicine.findById(medicineId)
         alt not found or quantity < requested
             API-->>UI: 404 / 400 "Insufficient stock"
         end
-        API->>DB: medicine.quantity -= qty, save()
+        API->>API: deduct from batches, earliest expiry first (FEFO)
+        API->>DB: findOneAndUpdate({_id, __v, quantity ≥ qty}, {quantity, batches, stockStatus, __v+1})
+        alt no document matched (concurrent write or stock gone)
+            API-->>UI: 409 "Please retry checkout"
+        end
         API->>DB: InventoryHistory.create({action: 'sale'})
     end
 
     API->>API: subtotal, tax = 12% GST, grandTotal
     API->>DB: Bill.create({billNumber, items, totals, staffId})
+    opt transaction active
+        API->>DB: commitTransaction()
+    end
+    Note over API,DB: On any failure: abort the transaction, or (standalone MongoDB) restore each deducted medicine and delete the sale history rows written so far
 
     opt customerId given
         API->>DB: Customer.findById → email, phone
@@ -55,7 +67,7 @@ sequenceDiagram
 | `GET /api/inventory` | Computes each medicine's earliest batch expiry and returns medicines sorted by it (`sortByFEFO`) |
 | `Billing.jsx` | Re-sorts by the first batch's expiry and shows that batch's number, rack and expiry, with a "select nearest expiry first" hint |
 | `POST /api/inventory/:id/adjust-quantity` | **True batch-level FEFO:** sorts batches by expiry and deducts from the oldest first |
-| `POST /api/billing` | Decrements only the medicine's **total** `quantity`; batch quantities are **not** changed (see limitations) |
+| `POST /api/billing` | **Batch-level FEFO:** deducts from the earliest-expiring batches and records the batch number(s) consumed on each bill line |
 
 ### Edge cases
 
@@ -224,17 +236,17 @@ Alerts older than 24 hours are deleted on each run. Generation is triggered by t
 
 ## Known limitations
 
-- **Billing is not batch-aware.** `createBill` lowers `Medicine.quantity` but not `batches[].quantity`, so batch totals drift from the medicine total after sales. It also stores `batchNumber: medicine.batchNumber`, a field that doesn't exist on the schema, so bills carry no batch number. The client does send `batchNumber`, but the server ignores it.
-- **No transaction around a bill.** Items are processed one at a time. If item 3 fails validation, items 1–2 have already been deducted and logged, and no bill is saved.
-- **Race condition on stock.** "Read quantity, check, subtract, save" is not atomic, so concurrent bills can oversell.
+- **Billing atomicity depends on the MongoDB topology.** On a replica set (e.g. Atlas) a bill runs in a transaction. On a standalone server (e.g. the local Docker setup) it falls back to a compensating rollback, which restores each medicine's saved `batches` wholesale and could overwrite a change made by another request in between.
+- **The `__v` concurrency check only catches writers that bump `__v`.** `createBill` and `adjustQuantity` do; plain `findByIdAndUpdate` calls (e.g. `updateMedicine`) don't. The `quantity ≥ qty` filter still prevents overselling.
+- **Transaction write conflicts return 500.** When two bills collide inside transactions, MongoDB's `WriteConflict` error surfaces as a 500 rather than the 409 "please retry" response.
 - **Near-expiry and expired alerts don't fire.** `generateAlerts` checks `medicine.expiryDate`, but expiry lives on each batch. Only `low_stock` and `overstock` alerts are produced.
 - **Rule-based reorder can fail on zero stock.** `generateReorderSuggestions` sets priority `'Critical'`, which isn't in the PO `priority` enum (`Low | Medium | High`), so `PurchaseOrder.create` throws a validation error for out-of-stock medicines.
 - **Received batches get a fake expiry** (now + 1 year) and rack `'Receiving Area'` until someone edits them.
 
 ## Future improvements
 
-- Make billing deduct from batches FEFO-style, reusing the logic in `adjustQuantity`, and record the real batch on each bill line.
-- Wrap each bill in a **MongoDB transaction** (`session.withTransaction`) and replace read-modify-write with a conditional atomic update, e.g. `updateOne({_id, quantity: {$gte: qty}}, {$inc: {quantity: -qty}})`.
+- Use `session.withTransaction` so transient transaction errors are retried automatically, and map remaining write conflicts to 409.
+- Share the FEFO deduction logic between `createBill` and `adjustQuantity` instead of duplicating it.
 - Validate PO status transitions server-side with an explicit state machine.
 - Capture the real expiry and rack when receiving a PO.
 - Run alert generation on a schedule.

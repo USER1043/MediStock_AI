@@ -189,7 +189,7 @@ This is the standard MongoDB guidance: **embed what you read together and what i
 
 ## Known limitations
 
-- **`Medicine.quantity` can drift from the batch total.** Billing updates only the total (see [core-flows.md](core-flows.md#known-limitations)). No validator or hook enforces `quantity == Σ batches.quantity`.
+- **`Medicine.quantity` can drift from the batch total.** Billing and adjustments keep both in step, but no validator or hook enforces `quantity == Σ batches.quantity`, so other write paths (e.g. `updateMedicine`, Excel upload) can still diverge.
 - **The `{ expiryDate: 1 }` index is on a field that doesn't exist** at the top level of `Medicine`; expiry lives in `batches.expiryDate`. The index is unused, and FEFO sorting happens in application code.
 - **No index on `Medicine.name`**, yet upload and create look medicines up by name. The same applies to `InventoryHistory.medicineId` and `Bill.items.medicineId`, which forecasting queries per medicine.
 - **`Medicine.supplier` is free text**, not a reference to `Supplier`. `createRecommendation` tries `Supplier.findById(medicine.supplier)`, which only works if that string happens to be an ObjectId.

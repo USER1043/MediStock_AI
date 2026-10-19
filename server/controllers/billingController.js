@@ -1,95 +1,202 @@
+import mongoose from 'mongoose';
 import { Bill } from '../models/billModel.js';
 import { Medicine } from '../models/medicineModel.js';
 import { Customer } from '../models/customerModel.js';
 import { InventoryHistory } from '../models/inventoryHistoryModel.js';
 import { User } from '../models/userModel.js';
-import { generateBillNumber } from '../utils/helpers.js';
+import { generateBillNumber, getStockStatus } from '../utils/helpers.js';
 import { sendBillNotification, sendEmailNotification, sendWhatsAppNotification } from '../utils/notifications.js';
 import { generateBillPDF } from '../utils/pdfGenerator.js';
 import log from '../utils/logger.js';
 
-// Create bill
+// Create bill with atomic batch deductions, FEFO allocation, and concurrency protection
 export const createBill = async (req, res) => {
-  try {
-    const { customerId, customerName, customerType, items, paymentMethod } = req.body;
+  const { customerId, customerName, customerType, items, paymentMethod } = req.body;
 
-    if (!customerName || !items || items.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide customerName and items',
+  if (!customerName || !items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Please provide customerName and items',
+    });
+  }
+
+  // Check if replica set transactions are supported by the connected MongoDB topology
+  const topologyType = mongoose.connection?.client?.topology?.description?.type;
+  const supportsTransactions =
+    topologyType === 'ReplicaSetWithPrimary' ||
+    topologyType === 'Sharded' ||
+    topologyType === 'LoadBalanced';
+
+  let session = null;
+  let useTransaction = false;
+
+  if (supportsTransactions) {
+    try {
+      session = await mongoose.startSession();
+      session.startTransaction();
+      useTransaction = true;
+    } catch (sessionErr) {
+      log('WARN', 'Failed to initialize Mongo session; falling back to OCC with compensating rollback', {
+        error: sessionErr.message,
       });
+      if (session) await session.endSession().catch(() => {});
+      session = null;
+      useTransaction = false;
     }
+  }
 
-    // Calculate totals
+  // Track completed deductions for manual compensating rollback in standalone non-transactional mode
+  const completedDeductions = [];
+  // Sale history rows written so far; removed on rollback so forecasts/reports don't count phantom sales
+  const createdHistoryIds = [];
+
+  try {
     let subtotal = 0;
     const billItems = [];
 
     for (const item of items) {
-      const medicine = await Medicine.findById(item.medicineId);
+      if (!item.quantity || item.quantity <= 0) {
+        throw { status: 400, message: `Invalid quantity for medicine: ${item.medicineId}` };
+      }
+
+      // Read current medicine state with session if active
+      const medicine = await Medicine.findById(item.medicineId).session(useTransaction ? session : null);
 
       if (!medicine) {
-        return res.status(404).json({
-          success: false,
-          message: `Medicine not found: ${item.medicineId}`,
-        });
+        throw { status: 404, message: `Medicine not found: ${item.medicineId}` };
       }
 
       if (medicine.quantity < item.quantity) {
-        return res.status(400).json({
-          success: false,
+        throw {
+          status: 400,
           message: `Insufficient stock for ${medicine.name}. Available: ${medicine.quantity}`,
-        });
+        };
       }
 
       const itemTotal = medicine.sellingPrice * item.quantity;
       subtotal += itemTotal;
 
+      // Deep clone batches to compute FEFO deduction (oldest expiry date first)
+      let updatedBatches = medicine.batches
+        ? medicine.batches.map((b) => (b.toObject ? b.toObject() : { ...b }))
+        : [];
+      let remainingToDeduct = item.quantity;
+      const deductedBatchNumbers = [];
+
+      // Sort batches ascending by expiry (FEFO)
+      updatedBatches.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+
+      for (let batch of updatedBatches) {
+        if (remainingToDeduct === 0) break;
+        if (batch.quantity > 0) {
+          const deduction = Math.min(batch.quantity, remainingToDeduct);
+          batch.quantity -= deduction;
+          remainingToDeduct -= deduction;
+          deductedBatchNumbers.push(batch.batchNumber);
+        }
+      }
+
+      // Record the batches actually consumed (may span several when the oldest runs out)
+      const billedBatchNumber = deductedBatchNumbers.length > 0 ? deductedBatchNumbers.join(', ') : 'N/A';
+
+      const newQuantity = medicine.quantity - item.quantity;
+      const newStockStatus = getStockStatus(newQuantity, medicine.reorderLevel);
+
+      // Atomic conditional update with Optimistic Concurrency Control (OCC)
+      // Checks both sufficient quantity and matching version (__v) to prevent lost updates
+      const updateFilter = {
+        _id: medicine._id,
+        quantity: { $gte: item.quantity },
+        __v: medicine.__v,
+      };
+
+      const updatePayload = {
+        $set: {
+          quantity: newQuantity,
+          batches: updatedBatches,
+          stockStatus: newStockStatus,
+        },
+        $inc: { __v: 1 },
+      };
+
+      const updatedMedicine = await Medicine.findOneAndUpdate(updateFilter, updatePayload, {
+        new: true,
+        session: useTransaction ? session : undefined,
+      });
+
+      if (!updatedMedicine) {
+        throw {
+          status: 409,
+          message: `Inventory write conflict or stock depleted for ${medicine.name}. Please retry checkout.`,
+        };
+      }
+
+      // Track for compensating rollback in case non-transactional mode fails later in loop
+      completedDeductions.push({
+        medicineId: medicine._id,
+        quantityDeducted: item.quantity,
+        originalQuantity: medicine.quantity,
+        originalBatches: medicine.batches,
+        originalStockStatus: medicine.stockStatus,
+      });
+
       billItems.push({
         medicineId: medicine._id,
         name: medicine.name,
-        batchNumber: medicine.batchNumber,
+        batchNumber: billedBatchNumber,
         quantity: item.quantity,
         price: medicine.sellingPrice,
         total: itemTotal,
       });
 
-      // Reduce medicine quantity (FEFO - take from oldest expiry first)
-      medicine.quantity -= item.quantity;
-      await medicine.save();
+      // Log the inventory sale mutation
+      const historyDocs = [
+        {
+          medicineId: medicine._id,
+          medicineName: medicine.name,
+          action: 'sale',
+          quantityChanged: -item.quantity,
+          previousQuantity: medicine.quantity,
+          newQuantity: newQuantity,
+          reason: 'Bill sale',
+          performedBy: req.user.id,
+        },
+      ];
 
-      // Log the sale
-      await InventoryHistory.create({
-        medicineId: medicine._id,
-        medicineName: medicine.name,
-        action: 'sale',
-        quantityChanged: -item.quantity,
-        previousQuantity: medicine.quantity + item.quantity,
-        newQuantity: medicine.quantity,
-        reason: 'Bill sale',
-        performedBy: req.user.id,
-      });
+      const createdHistory = await InventoryHistory.create(historyDocs, useTransaction ? { session } : undefined);
+      createdHistoryIds.push(...createdHistory.map((h) => h._id));
     }
 
     // Calculate tax (12% GST)
     const tax = subtotal * 0.12;
     const grandTotal = subtotal + tax;
 
-    // Create bill
-    const bill = await Bill.create({
-      billNumber: generateBillNumber(),
-      customerId: customerId || null,
-      customerName,
-      customerType,
-      items: billItems,
-      subtotal,
-      tax,
-      grandTotal,
-      paymentMethod: paymentMethod || 'cash',
-      paymentStatus: 'completed',
-      staffId: req.user.id,
-    });
+    // Create bill record
+    const billDocs = [
+      {
+        billNumber: generateBillNumber(),
+        customerId: customerId || null,
+        customerName,
+        customerType,
+        items: billItems,
+        subtotal,
+        tax,
+        grandTotal,
+        paymentMethod: paymentMethod || 'cash',
+        paymentStatus: 'completed',
+        staffId: req.user.id,
+      },
+    ];
 
-    // Get customer for notification
+    const createdBills = await Bill.create(billDocs, useTransaction ? { session } : undefined);
+    const bill = createdBills[0];
+
+    // Commit transaction if active
+    if (useTransaction && session) {
+      await session.commitTransaction();
+    }
+
+    // Asynchronous customer notification & PDF generation outside transaction scope
     let customerEmail = null;
     let customerPhone = null;
 
@@ -101,16 +208,11 @@ export const createBill = async (req, res) => {
       }
     }
 
-    // Send notification
     try {
-      // Generate PDF
       const pdfPath = await generateBillPDF(bill);
       log('INFO', 'Bill PDF generated', { pdfPath });
-
-      // Send bill notification with PDF
       await sendBillNotification(bill, customerPhone, customerEmail);
 
-      // If payment method is GPay, notify owner
       if (paymentMethod === 'gpay') {
         const owner = await User.findOne({ role: 'owner' });
         if (owner) {
@@ -119,8 +221,7 @@ export const createBill = async (req, res) => {
             'GPay Payment Received',
             `A GPay payment of ₹${grandTotal.toFixed(2)} has been received for Bill #${bill.billNumber}\nCustomer: ${customerName}`
           );
-          
-          // Also send WhatsApp to owner if configured
+
           if (process.env.OWNER_WHATSAPP_NUMBER) {
             await sendWhatsAppNotification(
               process.env.OWNER_WHATSAPP_NUMBER,
@@ -130,23 +231,73 @@ export const createBill = async (req, res) => {
         }
       }
     } catch (notifError) {
-      log('WARN', 'Notification failed but bill created', { billId: bill._id, error: notifError.message });
+      log('WARN', 'Notification failed but bill created', {
+        billId: bill._id,
+        error: notifError.message,
+      });
     }
 
     log('INFO', 'Bill created successfully', { billId: bill._id, billNumber: bill.billNumber });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'Bill created successfully',
       bill,
     });
   } catch (error) {
-    log('ERROR', 'Create bill error', { error: error.message });
-    res.status(500).json({
+    // Rollback: abort ACID transaction or execute compensating transaction
+    if (useTransaction && session) {
+      try {
+        await session.abortTransaction();
+      } catch (abortErr) {
+        log('ERROR', 'Transaction abort failed', { error: abortErr.message });
+      }
+    } else if (completedDeductions.length > 0) {
+      log('WARN', 'Triggering compensating rollback for partial deductions', {
+        count: completedDeductions.length,
+      });
+      for (const comp of completedDeductions) {
+        try {
+          await Medicine.updateOne(
+            { _id: comp.medicineId },
+            {
+              $inc: { quantity: comp.quantityDeducted, __v: 1 },
+              $set: {
+                batches: comp.originalBatches,
+                stockStatus: comp.originalStockStatus,
+              },
+            }
+          );
+        } catch (rollbackErr) {
+          log('ERROR', 'Compensating rollback failed', {
+            error: rollbackErr.message,
+            medicineId: comp.medicineId,
+          });
+        }
+      }
+
+      if (createdHistoryIds.length > 0) {
+        try {
+          await InventoryHistory.deleteMany({ _id: { $in: createdHistoryIds } });
+        } catch (historyErr) {
+          log('ERROR', 'Failed to remove sale history during rollback', {
+            error: historyErr.message,
+            historyIds: createdHistoryIds,
+          });
+        }
+      }
+    }
+
+    log('ERROR', 'Create bill error', { error: error.message || error });
+    const statusCode = error.status || 500;
+    return res.status(statusCode).json({
       success: false,
-      message: 'Error creating bill',
-      error: error.message,
+      message: error.message || 'Error creating bill',
     });
+  } finally {
+    if (session) {
+      await session.endSession().catch(() => {});
+    }
   }
 };
 

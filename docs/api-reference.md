@@ -52,7 +52,7 @@ Base URL (local): `http://localhost:5000/api`
 | GET | `/date-range` | any | Bills in a date range (query params) |
 | GET | `/:id` | any | One bill |
 | GET | `/customer/:customerId` | any | A customer's bills |
-| POST | `/` | owner, staff | `{customerId?, customerName, customerType?, items: [{medicineId, quantity}], paymentMethod?}`. Deducts stock, adds 12% GST, generates a PDF, sends notifications. |
+| POST | `/` | owner, staff | `{customerId?, customerName, customerType?, items: [{medicineId, quantity}], paymentMethod?}`. Deducts stock from batches FEFO-style, adds 12% GST, generates a PDF, sends notifications. Returns 409 if the stock changed concurrently (retry). |
 | POST | `/payment/confirm` | owner, staff | Confirm a payment |
 
 ## Customers — `/api/customers`

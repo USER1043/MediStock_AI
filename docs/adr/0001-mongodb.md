@@ -21,7 +21,7 @@ Use **MongoDB** through **Mongoose**. Embed batches as an array in `Medicine`. E
 
 - ✅ One query returns a medicine with all its batches; updating one medicine's batches is atomic (single document).
 - ✅ Flexible schemas for audit and report data; JSON from database to browser without mapping layers.
-- ⚠️ Operations that span documents (a bill touching several medicines, a bill plus stock) are **not atomic** unless multi-document transactions are used, which the code doesn't do today.
+- ⚠️ Operations that span documents (a bill touching several medicines, a bill plus stock) are **not atomic** unless multi-document transactions are used. Billing uses one when connected to a replica set and falls back to a compensating rollback on a standalone server.
 - ⚠️ Invariants such as `quantity == Σ batches.quantity` must be enforced in application code.
 - ⚠️ Cross-entity analytics (sales per medicine over time) need aggregation pipelines and good indexes.
 - Revisit if the product moves to multi-branch accounting with strict financial consistency requirements.
