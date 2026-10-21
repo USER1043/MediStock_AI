@@ -388,7 +388,7 @@ export const adjustQuantity = async (req, res) => {
       $inc: { __v: 1 },
     };
 
-    const updatedMedicine = await Medicine.findOneAndUpdate(updateFilter, updatePayload, { new: true });
+    const updatedMedicine = await Medicine.findOneAndUpdate(updateFilter, updatePayload, { returnDocument: 'after' });
 
     if (!updatedMedicine) {
       return res.status(409).json({
