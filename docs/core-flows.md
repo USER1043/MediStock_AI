@@ -189,9 +189,9 @@ sequenceDiagram
     API->>API: XLSX read first sheet → rows, then detectAnomalies(rows)
     loop each row
         alt medicine name exists
-            alt batchNumber exists
-                API->>DB: add quantity to that batch, update expiry/rack
-            else new batch
+            alt batch with same batchNumber and expiry day exists
+                API->>DB: add quantity to that batch (rack updated if given)
+            else new batch number or different expiry
                 API->>DB: push batch
             end
             API->>DB: medicine.quantity += row.quantity

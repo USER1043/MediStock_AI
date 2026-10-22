@@ -136,7 +136,7 @@ npm test        # node --experimental-vm-modules jest (ESM)
 | `__tests__/billing.math.test.js` | Unit | No | Price, discount, tax and change arithmetic |
 | `__tests__/billing.helpers.test.js` | Unit | No | Formatting, validation and invoice-number helpers |
 | `__tests__/billing.controller.test.js` | Unit-style | No | Billing rules: stock checks, deduction, payment methods |
-| `__tests__/billing.integration.test.js` | Integration | No (in-memory) | `createBill` and `adjustQuantity` against `mongodb-memory-server`, on both a standalone server and a replica set: FEFO deduction, rollback, concurrent requests. The first run downloads a `mongod` binary |
+| `__tests__/billing.integration.test.js` | Integration | No (in-memory) | `createBill`, `adjustQuantity` and `createMedicine` against `mongodb-memory-server`, on both a standalone server and a replica set: FEFO deduction, rollback, concurrent requests, matching added stock by batch number and expiry. The first run downloads a `mongod` binary |
 | `tests/accuracy.test.js` | Model | No | LSTM on synthetic trend and seasonal data (30 s timeout) |
 | `tests/upload.test.js` | Integration (Supertest) | **Yes** | `POST /api/uploads/excel` end to end against `server.js` |
 

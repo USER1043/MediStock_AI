@@ -23,7 +23,9 @@ jest.unstable_mockModule('../utils/logger.js', () => ({
 }));
 
 const { createBill } = await import('../controllers/billingController.js');
-const { adjustQuantity } = await import('../controllers/inventoryController.js');
+const { adjustQuantity, createMedicine: createMedicineHandler } = await import(
+  '../controllers/inventoryController.js'
+);
 const { Medicine } = await import('../models/medicineModel.js');
 const { Bill } = await import('../models/billModel.js');
 const { InventoryHistory } = await import('../models/inventoryHistoryModel.js');
@@ -265,6 +267,89 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
     });
   });
 
+  describe('createMedicine (adding stock)', () => {
+    // Same shape MedicineInventory.jsx sends: batch details nested under batches[0]
+    const formPayload = (batch) => ({
+      name: 'Paracetamol 500mg',
+      category: 'Analgesic',
+      purchasePrice: 2,
+      sellingPrice: 5,
+      quantity: batch.quantity,
+      supplier: 'SUP-1',
+      batches: [batch],
+    });
+
+    test('accepts the inventory form payload and creates the medicine', async () => {
+      const res = mockRes();
+
+      await createMedicineHandler(
+        mockReq(formPayload({ batchNumber: 'B-1', expiryDate: '2027-03-01', quantity: 20, rackNumber: 'R1' })),
+        res
+      );
+
+      expect(res.statusCode).toBe(201);
+      const med = await Medicine.findOne({ name: 'Paracetamol 500mg' });
+      expect(med.quantity).toBe(20);
+      expect(med.batches).toHaveLength(1);
+      expect(med.batches[0].expiryDate.toISOString().slice(0, 10)).toBe('2027-03-01');
+    });
+
+    test('merges into the existing batch only when number and expiry both match', async () => {
+      const med = await createMedicine();
+      const soonDay = med.batches.find((b) => b.batchNumber === 'B-SOON').expiryDate.toISOString().slice(0, 10);
+      const res = mockRes();
+
+      await createMedicineHandler(
+        mockReq(formPayload({ batchNumber: 'B-SOON', expiryDate: soonDay, quantity: 3, rackNumber: 'R2' })),
+        res
+      );
+
+      expect(res.statusCode).toBe(201);
+      const after = await Medicine.findById(med._id);
+      expect(after.batches).toHaveLength(2);
+      expect(after.quantity).toBe(18);
+      expect(batchQty(after, 'B-SOON')).toBe(8);
+    });
+
+    test('creates a separate batch for a different expiry instead of overwriting it', async () => {
+      const med = await createMedicine();
+      const originalSoon = med.batches.find((b) => b.batchNumber === 'B-SOON').expiryDate.toISOString();
+      const res = mockRes();
+
+      await createMedicineHandler(
+        mockReq(formPayload({ batchNumber: 'B-SOON', expiryDate: '2029-01-15', quantity: 4, rackNumber: 'R2' })),
+        res
+      );
+
+      expect(res.statusCode).toBe(201);
+      const after = await Medicine.findById(med._id);
+      expect(after.quantity).toBe(19);
+      expect(after.batches).toHaveLength(3);
+      const soonBatches = after.batches.filter((b) => b.batchNumber === 'B-SOON');
+      expect(soonBatches.map((b) => b.expiryDate.toISOString()).sort()).toEqual(
+        [originalSoon, new Date('2029-01-15').toISOString()].sort()
+      );
+      // The original lot keeps its quantity and expiry
+      expect(soonBatches.find((b) => b.expiryDate.toISOString() === originalSoon).quantity).toBe(5);
+    });
+
+    test('creates a new batch for a new batch number', async () => {
+      const med = await createMedicine();
+      const res = mockRes();
+
+      await createMedicineHandler(
+        mockReq(formPayload({ batchNumber: 'B-NEW', expiryDate: '2028-08-08', quantity: 7, rackNumber: 'R5' })),
+        res
+      );
+
+      expect(res.statusCode).toBe(201);
+      const after = await Medicine.findById(med._id);
+      expect(after.quantity).toBe(22);
+      expect(after.batches).toHaveLength(3);
+      expect(batchQty(after, 'B-NEW')).toBe(7);
+    });
+  });
+
   describe('adjustQuantity', () => {
     test('deducts a negative adjustment FEFO and returns the updated medicine', async () => {
       const med = await createMedicine();
@@ -287,7 +372,51 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
       expect(history[0]).toMatchObject({ quantityChanged: -6, previousQuantity: 15, newQuantity: 9 });
     });
 
-    test('adds a positive adjustment to the latest-expiry batch', async () => {
+    test('adds a positive adjustment to the batch with the same number and expiry', async () => {
+      const med = await createMedicine();
+      const res = mockRes();
+      const soonExpiry = med.batches.find((b) => b.batchNumber === 'B-SOON').expiryDate;
+
+      await adjustQuantity(
+        mockReq(
+          { quantityChanged: 4, reason: 'Recount', batchNumber: 'B-SOON', expiryDate: soonExpiry },
+          { id: med._id.toString() }
+        ),
+        res
+      );
+
+      expect(res.statusCode).toBe(200);
+      const after = await Medicine.findById(med._id);
+      expect(after.quantity).toBe(19);
+      expect(after.batches).toHaveLength(2);
+      expect(batchQty(after, 'B-SOON')).toBe(9);
+      expect(batchQty(after, 'B-LATE')).toBe(10);
+    });
+
+    test('creates a new batch when no batch has that number and expiry', async () => {
+      const med = await createMedicine();
+      const res = mockRes();
+
+      await adjustQuantity(
+        mockReq(
+          { quantityChanged: 6, reason: 'Found stock', batchNumber: 'B-NEW', expiryDate: '2028-06-30', rackNumber: 'R9' },
+          { id: med._id.toString() }
+        ),
+        res
+      );
+
+      expect(res.statusCode).toBe(200);
+      const after = await Medicine.findById(med._id);
+      expect(after.quantity).toBe(21);
+      expect(after.batches).toHaveLength(3);
+      const added = after.batches.find((b) => b.batchNumber === 'B-NEW');
+      expect(added).toMatchObject({ quantity: 6, rackNumber: 'R9' });
+      expect(added.expiryDate.toISOString().slice(0, 10)).toBe('2028-06-30');
+      expect(batchQty(after, 'B-LATE')).toBe(10);
+      expect(batchQty(after, 'B-SOON')).toBe(5);
+    });
+
+    test('requires a batch number and expiry when adding stock', async () => {
       const med = await createMedicine();
       const res = mockRes();
 
@@ -296,11 +425,8 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
         res
       );
 
-      expect(res.statusCode).toBe(200);
-      const after = await Medicine.findById(med._id);
-      expect(after.quantity).toBe(19);
-      expect(batchQty(after, 'B-LATE')).toBe(14);
-      expect(batchQty(after, 'B-SOON')).toBe(5);
+      expect(res.statusCode).toBe(400);
+      expect((await Medicine.findById(med._id)).quantity).toBe(15);
     });
 
     test('refuses to go below zero', async () => {

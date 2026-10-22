@@ -5,6 +5,7 @@ import {
   isNearExpiry,
   isExpired,
   getStockStatus,
+  addStockToBatches,
 } from '../utils/helpers.js';
 import log from '../utils/logger.js';
 
@@ -67,10 +68,14 @@ export const getMedicine = async (req, res) => {
 // Create medicine (or add batch if exists)
 export const createMedicine = async (req, res) => {
   try {
-    const {
-      name, category, batchNumber, expiryDate, quantity,
-      purchasePrice, sellingPrice, rackNumber, reorderLevel, supplier
-    } = req.body;
+    const { name, category, purchasePrice, sellingPrice, reorderLevel, supplier } = req.body;
+
+    // Batch details may come top-level or nested as batches[0] (the inventory form sends the latter)
+    const batchInput = (Array.isArray(req.body.batches) && req.body.batches[0]) || {};
+    const batchNumber = req.body.batchNumber ?? batchInput.batchNumber;
+    const expiryDate = req.body.expiryDate ?? batchInput.expiryDate;
+    const rackNumber = req.body.rackNumber ?? batchInput.rackNumber;
+    const quantity = req.body.quantity ?? batchInput.quantity;
 
     if (!name || !category || !batchNumber || !expiryDate || !purchasePrice || !sellingPrice || !rackNumber) {
       return res.status(400).json({
@@ -85,17 +90,10 @@ export const createMedicine = async (req, res) => {
     let returnedMedicine;
 
     if (existingMedicine) {
-      // Check if batch already exists
-      const existingBatch = existingMedicine.batches.find(b => b.batchNumber === batchNumber);
-      if (existingBatch) {
-        existingBatch.quantity += numQuantity;
-        existingBatch.expiryDate = expiryDate;
-        existingBatch.rackNumber = rackNumber;
-      } else {
-        existingMedicine.batches.push({
-          batchNumber, expiryDate, quantity: numQuantity, rackNumber
-        });
-      }
+      // Add to the batch with the same batch number and expiry, or start a new batch
+      addStockToBatches(existingMedicine.batches, {
+        batchNumber, expiryDate, quantity: numQuantity, rackNumber
+      });
 
       existingMedicine.quantity += numQuantity;
       existingMedicine.stockStatus = getStockStatus(existingMedicine.quantity, existingMedicine.reorderLevel);
@@ -317,12 +315,20 @@ export const getExpiredMedicines = async (req, res) => {
 export const adjustQuantity = async (req, res) => {
   try {
     const { id } = req.params;
-    const { quantityChanged, reason } = req.body;
+    const { quantityChanged, reason, batchNumber, expiryDate, rackNumber } = req.body;
 
     if (!quantityChanged) {
       return res.status(400).json({
         success: false,
         message: 'quantityChanged is required',
+      });
+    }
+
+    // Added stock must say which batch it belongs to, so it lands on the right expiry
+    if (Number(quantityChanged) > 0 && (!batchNumber || !expiryDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'batchNumber and expiryDate are required when adding stock',
       });
     }
 
@@ -362,11 +368,10 @@ export const adjustQuantity = async (req, res) => {
         }
       }
     } else {
-      // Add quantity to the newest batch
-      medicine.batches.sort((a, b) => new Date(b.expiryDate) - new Date(a.expiryDate));
-      if (medicine.batches.length > 0) {
-        medicine.batches[0].quantity += numChanged;
-      }
+      // Add to the batch with the same batch number and expiry, or start a new batch
+      addStockToBatches(medicine.batches, {
+        batchNumber, expiryDate, quantity: numChanged, rackNumber
+      });
     }
 
     const newQuantity = medicine.quantity + numChanged;

@@ -38,10 +38,10 @@ Base URL (local): `http://localhost:5000/api`
 | GET | `/history` | owner, staff | Inventory movement ledger |
 | GET | `/intelligence` | owner | Fast/slow movers, critical items, recommendations |
 | GET | `/:id` | any | One medicine |
-| POST | `/` | owner, staff | `{name, category, batchNumber, expiryDate, quantity, purchasePrice, sellingPrice, rackNumber, reorderLevel?, supplier?}`. Upserts by `name`: adds a new batch or tops up an existing one. |
+| POST | `/` | owner, staff | `{name, category, batchNumber, expiryDate, quantity, purchasePrice, sellingPrice, rackNumber, reorderLevel?, supplier?}`; batch fields may instead be nested as `batches: [{…}]`. Upserts by `name`: tops up the batch with the same `batchNumber` **and** expiry day, otherwise adds a new batch (an existing batch's expiry is never overwritten). |
 | PUT | `/:id` | owner, staff | Update medicine fields |
 | DELETE | `/:id` | owner | Delete medicine |
-| POST | `/:id/adjust-quantity` | owner, staff | `{quantityChanged, reason}`. Negative values deduct FEFO from the oldest batch; positive values add to the newest batch. |
+| POST | `/:id/adjust-quantity` | owner, staff | `{quantityChanged, reason, batchNumber?, expiryDate?, rackNumber?}`. Negative values deduct FEFO from the oldest batch. Positive values require `batchNumber` and `expiryDate`: they top up the batch with that number and expiry day, or create a new batch. Returns 409 on a concurrent change. |
 
 ## Billing — `/api/billing`
 

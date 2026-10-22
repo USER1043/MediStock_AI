@@ -257,7 +257,7 @@ const MedicineInventory = () => {
             supplier: form.supplierId,
             batches: [{
                 batchNumber: form.medicineId,
-                expiryDate: form.expiryDate ? dayjs(form.expiryDate).toISOString() : null,
+                expiryDate: form.expiryDate ? dayjs(form.expiryDate).format('YYYY-MM-DD') : null,
                 quantity: Number(form.stockQuantity),
                 rackNumber: form.rackNumber
             }]
