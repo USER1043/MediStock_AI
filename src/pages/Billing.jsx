@@ -28,6 +28,8 @@ const Billing = () => {
   const [medicines, setMedicines] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [checkoutError, setCheckoutError] = useState('');
+  const [isPaying, setIsPaying] = useState(false);
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -86,6 +88,48 @@ const Billing = () => {
     fetchBillingData();
   }, []);
 
+  // A changed bill gets a fresh stock check at payment, so drop the previous checkout error
+  useEffect(() => {
+    setCheckoutError('');
+  }, [billItems]);
+
+  // Re-read stock so the page reflects sales made since it loaded; returns the fresh list
+  const refreshStock = async () => {
+    const res = await axiosInstance.get('/inventory');
+    const fresh = res.data.medicines || [];
+    setMedicines(fresh);
+    return fresh;
+  };
+
+  // The batch the backend will sell from first (earliest expiry that still has stock)
+  const nextBatch = (medicine) => {
+    const batches = (medicine.batches || []).filter(b => b.quantity > 0);
+    batches.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+    return batches[0] || (medicine.batches && medicine.batches[0]) || {};
+  };
+
+  // Units of a medicine already in the bill
+  const cartQuantity = (medicineId) =>
+    billItems.filter(item => item.medicineId === medicineId).reduce((sum, item) => sum + item.quantity, 0);
+
+  // Stock still available to add for the selected medicine, and why Add is blocked (if it is)
+  const availableToAdd = selectedMedicine ? selectedMedicine.quantity - cartQuantity(selectedMedicine._id) : 0;
+  const addError = !selectedMedicine
+    ? ''
+    : selectedMedicine.quantity <= 0
+      ? 'Out of stock'
+      : availableToAdd <= 0
+        ? 'All available stock is already in the bill'
+        : quantity > availableToAdd
+          ? `Insufficient stock: only ${availableToAdd} more available`
+          : '';
+
+  // Same check while editing a bill line
+  const editingMedicine = editingItem ? medicines.find(m => m._id === editingItem) : null;
+  const editError = editingMedicine && editQuantity > editingMedicine.quantity
+    ? `Insufficient stock: only ${editingMedicine.quantity} available`
+    : '';
+
   // Start voice input
   const startVoiceInput = (mode) => {
     if (recognition) {
@@ -116,23 +160,21 @@ const Billing = () => {
   const handleAddItem = () => {
     if (!selectedMedicine || quantity <= 0) return;
 
-    // Check if enough stock
-    if (quantity > selectedMedicine.quantity) {
-      return;
-    }
+    // Check if enough stock, counting what is already in the bill
+    if (addError) return;
 
-    const existingItem = billItems.find(item => item.medicineId === selectedMedicine.id);
+    const existingItem = billItems.find(item => item.medicineId === selectedMedicine._id);
 
     if (existingItem) {
       // Update quantity if medicine already in bill
       setBillItems(billItems.map(item =>
-        item.medicineId === selectedMedicine.id
-          ? { ...item, quantity: item.quantity + quantity }
+        item.medicineId === selectedMedicine._id
+          ? { ...item, quantity: item.quantity + quantity, total: item.price * (item.quantity + quantity) }
           : item
       ));
     } else {
       // Add new item
-      const primaryBatch = selectedMedicine.batches && selectedMedicine.batches.length > 0 ? selectedMedicine.batches[0] : {};
+      const primaryBatch = nextBatch(selectedMedicine);
       const newItem = {
         medicineId: selectedMedicine._id,
         name: selectedMedicine.name,
@@ -163,8 +205,7 @@ const Billing = () => {
       return;
     }
 
-    const medicine = medicines.find(m => m._id === medicineId);
-    if (editQuantity > medicine.quantity) {
+    if (editError) {
       return;
     }
 
@@ -196,8 +237,31 @@ const Billing = () => {
 
   // Process payment
   const handlePayment = async () => {
-    if (billItems.length === 0) {
+    if (billItems.length === 0 || isPaying) {
       return;
+    }
+
+    setCheckoutError('');
+    setIsPaying(true);
+
+    // Re-check stock right before paying: another counter may have sold some since this page loaded
+    try {
+      const fresh = await refreshStock();
+      const shortages = billItems
+        .map(item => {
+          const med = fresh.find(m => m._id === item.medicineId);
+          const available = med ? med.quantity : 0;
+          return available < item.quantity ? `${item.name} (in bill: ${item.quantity}, available: ${available})` : null;
+        })
+        .filter(Boolean);
+      if (shortages.length > 0) {
+        setCheckoutError(`Insufficient stock for: ${shortages.join('; ')}. Reduce the quantity or remove the item.`);
+        setIsPaying(false);
+        return;
+      }
+    } catch (error) {
+      // If the refresh fails, fall through: the server still checks stock atomically
+      console.error('Stock refresh failed:', error);
     }
 
     const finalCustomerName = customerType === 'regular' && selectedCustomer
@@ -234,6 +298,7 @@ const Billing = () => {
         paymentMethod: res.data.bill.paymentMethod
       });
       setShowPaymentSuccess(true);
+      refreshStock().catch(() => {});
 
       // Reset form after 3 seconds
       setTimeout(() => {
@@ -248,7 +313,11 @@ const Billing = () => {
       }, 3000);
     } catch (error) {
       console.error('Checkout failed:', error);
-      alert('Failed to process payment. ' + (error.response?.data?.message || ''));
+      // The server rejected the bill (e.g. stock changed in the last moment): show why and reload stock
+      setCheckoutError('Failed to process payment. ' + (error.response?.data?.message || ''));
+      refreshStock().catch(() => {});
+    } finally {
+      setIsPaying(false);
     }
   };
 
@@ -424,15 +493,18 @@ const Billing = () => {
                 ) : (
                   <div className="divide-y">
                     {sortByFEFO(filteredMedicines).map(medicine => {
-                      const batch = medicine.batches && medicine.batches.length > 0 ? medicine.batches[0] : {};
+                      const batch = nextBatch(medicine);
+                      const outOfStock = medicine.quantity <= 0;
                       return (
                         <button
                           key={medicine._id}
+                          disabled={outOfStock}
                           onClick={() => {
                             setSelectedMedicine(medicine);
+                            setQuantity(1);
                             setSearchTerm('');
                           }}
-                          className="w-full p-4 text-left hover:bg-primary-50 transition-colors"
+                          className="w-full p-4 text-left hover:bg-primary-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                         >
                           <div className="flex justify-between items-start">
                             <div>
@@ -440,6 +512,7 @@ const Billing = () => {
                               <p className="text-sm text-gray-600">{medicine.category}</p>
                               <p className="text-xs text-gray-500 mt-1">
                                 Batch: {batch.batchNumber || 'N/A'} | Rack: {batch.rackNumber || 'N/A'} | Stock: {medicine.quantity}
+                                {outOfStock && <span className="ml-2 text-red-600 font-semibold">Out of stock</span>}
                               </p>
                             </div>
                             <p className="font-bold text-primary-600">{formatCurrency(medicine.sellingPrice)}</p>
@@ -465,19 +538,22 @@ const Billing = () => {
                 <div className="grid grid-cols-2 gap-2 text-sm mb-3">
                   <div>
                     <span className="text-gray-600">Batch:</span>
-                    <span className="ml-2 font-semibold">{selectedMedicine.batches && selectedMedicine.batches[0] ? selectedMedicine.batches[0].batchNumber : 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).batchNumber || 'N/A'}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Rack:</span>
-                    <span className="ml-2 font-semibold">{selectedMedicine.batches && selectedMedicine.batches[0] ? selectedMedicine.batches[0].rackNumber : 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).rackNumber || 'N/A'}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Expiry:</span>
-                    <span className="ml-2 font-semibold">{selectedMedicine.batches && selectedMedicine.batches[0] && selectedMedicine.batches[0].expiryDate ? new Date(selectedMedicine.batches[0].expiryDate).toLocaleDateString() : 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).expiryDate ? new Date(nextBatch(selectedMedicine).expiryDate).toLocaleDateString() : 'N/A'}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Available:</span>
                     <span className="ml-2 font-semibold">{selectedMedicine.quantity}</span>
+                    {cartQuantity(selectedMedicine._id) > 0 && (
+                      <span className="ml-1 text-xs text-gray-500">({cartQuantity(selectedMedicine._id)} in bill)</span>
+                    )}
                   </div>
                 </div>
 
@@ -489,7 +565,7 @@ const Billing = () => {
                       <input
                         type="number"
                         min="1"
-                        max={selectedMedicine.quantity}
+                        max={Math.max(availableToAdd, 1)}
                         value={quantity}
                         onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
                         className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
@@ -508,11 +584,15 @@ const Billing = () => {
                     {isListening && voiceMode === 'quantity' && (
                       <p className="text-xs text-primary-600 mt-1">🎤 Say the quantity number...</p>
                     )}
+                    {addError && (
+                      <p className="text-xs text-red-600 mt-1 font-medium">{addError}</p>
+                    )}
                   </div>
-                  <div className="flex items-end">
+                  <div className={`flex ${addError ? 'items-center' : 'items-end'}`}>
                     <button
                       onClick={handleAddItem}
-                      className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-medium flex items-center gap-2"
+                      disabled={Boolean(addError)}
+                      className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <FaPlus />
                       Add Item
@@ -580,7 +660,8 @@ const Billing = () => {
                             </div>
                             <button
                               onClick={() => handleUpdateItem(item.medicineId)}
-                              className="bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 text-sm"
+                              disabled={Boolean(editError)}
+                              className="bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <FaCheck size={12} />
                               Update
@@ -594,6 +675,9 @@ const Billing = () => {
                             </button>
                           </div>
 
+                          {editError && (
+                            <p className="text-xs text-red-600 font-medium">{editError}</p>
+                          )}
                           <div className="text-xs text-gray-500">
                             New Total: {formatCurrency(item.price * editQuantity)}
                           </div>
@@ -699,12 +783,19 @@ const Billing = () => {
                   </div>
                 </div>
 
+                {checkoutError && (
+                  <p className="mb-3 p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+                    {checkoutError}
+                  </p>
+                )}
+
                 {/* Complete Payment Button */}
                 <button
                   onClick={handlePayment}
-                  className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition-colors font-semibold text-lg"
+                  disabled={isPaying}
+                  className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition-colors font-semibold text-lg disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Complete Payment
+                  {isPaying ? 'Processing...' : 'Complete Payment'}
                 </button>
               </>
             )}
