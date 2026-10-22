@@ -97,6 +97,8 @@ export const createMedicine = async (req, res) => {
 
       existingMedicine.quantity += numQuantity;
       existingMedicine.stockStatus = getStockStatus(existingMedicine.quantity, existingMedicine.reorderLevel);
+      // Bump __v so concurrent bills/adjustments (which check it) see this stock change
+      existingMedicine.increment();
       await existingMedicine.save();
       returnedMedicine = existingMedicine;
     } else {
@@ -132,20 +134,15 @@ export const createMedicine = async (req, res) => {
   }
 };
 
-// Update medicine (Updates parent properties)
+// Update medicine: parent fields plus in-place edits to the batches named by _id
+const EDITABLE_MEDICINE_FIELDS = ['name', 'category', 'purchasePrice', 'sellingPrice', 'reorderLevel', 'supplier'];
+
 export const updateMedicine = async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const { batches: batchUpdates, __v: expectedVersion, quantity, reason } = req.body;
 
-    // Remove immutable or deeply nested arrays from simple update payload
-    delete updates.batches;
-
-    const medicine = await Medicine.findByIdAndUpdate(
-      id,
-      updates,
-      { new: true, runValidators: true }
-    );
+    const medicine = await Medicine.findById(id);
 
     if (!medicine) {
       return res.status(404).json({
@@ -154,17 +151,127 @@ export const updateMedicine = async (req, res) => {
       });
     }
 
-    if (updates.quantity !== undefined || updates.reorderLevel !== undefined) {
-      medicine.stockStatus = getStockStatus(medicine.quantity, medicine.reorderLevel);
-      await medicine.save();
+    // The client sends the version it loaded; refuse to overwrite changes made since (e.g. a sale)
+    if (expectedVersion !== undefined && Number(expectedVersion) !== medicine.__v) {
+      return res.status(409).json({
+        success: false,
+        message: 'This medicine was changed by someone else since you opened it. Reload and try again.',
+      });
     }
 
-    log('INFO', 'Medicine updated', { medicineId: id });
+    // Total stock follows the batches, so it can't be set directly here
+    if (quantity !== undefined && Number(quantity) !== medicine.quantity) {
+      return res.status(400).json({
+        success: false,
+        message: 'Change stock through a batch (batches[].quantity) or adjust-quantity, not the medicine total',
+      });
+    }
+
+    const $set = {};
+    for (const field of EDITABLE_MEDICINE_FIELDS) {
+      if (req.body[field] !== undefined) $set[field] = req.body[field];
+    }
+
+    // createMedicine upserts by name, so two medicines must not share one
+    if ($set.name !== undefined && $set.name !== medicine.name) {
+      const clash = await Medicine.findOne({ name: $set.name, _id: { $ne: medicine._id } });
+      if (clash) {
+        return res.status(409).json({
+          success: false,
+          message: `Another medicine is already named "${$set.name}"`,
+        });
+      }
+    }
+
+    // Apply batch edits in place; batches not listed are left as they are
+    let quantityDelta = 0;
+    if (Array.isArray(batchUpdates) && batchUpdates.length > 0) {
+      for (const update of batchUpdates) {
+        const batch = update._id && medicine.batches.id(update._id);
+        if (!batch) {
+          return res.status(400).json({
+            success: false,
+            message: 'Each batch update needs the _id of an existing batch of this medicine',
+          });
+        }
+
+        if (update.expiryDate !== undefined && isNaN(new Date(update.expiryDate))) {
+          return res.status(400).json({
+            success: false,
+            message: `Batch ${batch.batchNumber}: expiryDate is not a valid date`,
+          });
+        }
+
+        if (update.batchNumber !== undefined) batch.batchNumber = update.batchNumber;
+        if (update.expiryDate !== undefined) batch.expiryDate = update.expiryDate;
+        if (update.rackNumber !== undefined) batch.rackNumber = update.rackNumber;
+        if (update.quantity !== undefined) {
+          const newBatchQuantity = Number(update.quantity);
+          if (!Number.isInteger(newBatchQuantity) || newBatchQuantity < 0) {
+            return res.status(400).json({
+              success: false,
+              message: `Batch ${batch.batchNumber}: quantity must be a whole number of 0 or more`,
+            });
+          }
+          quantityDelta += newBatchQuantity - batch.quantity;
+          batch.quantity = newBatchQuantity;
+        }
+      }
+
+      // Keep the add-stock rule meaningful: no two batches with the same number and expiry day
+      const seen = new Set();
+      for (const batch of medicine.batches) {
+        const key = `${batch.batchNumber}|${new Date(batch.expiryDate).toISOString().slice(0, 10)}`;
+        if (seen.has(key)) {
+          return res.status(400).json({
+            success: false,
+            message: `Another batch already has number ${batch.batchNumber} with the same expiry date`,
+          });
+        }
+        seen.add(key);
+      }
+
+      $set.batches = medicine.batches.map((b) => b.toObject());
+    }
+
+    // The total moves by exactly what the batches moved, so existing data isn't silently recomputed
+    const newQuantity = medicine.quantity + quantityDelta;
+    $set.quantity = newQuantity;
+    $set.stockStatus = getStockStatus(newQuantity, $set.reorderLevel ?? medicine.reorderLevel);
+
+    const updatedMedicine = await Medicine.findOneAndUpdate(
+      { _id: medicine._id, __v: medicine.__v },
+      { $set, $inc: { __v: 1 } },
+      { returnDocument: 'after', runValidators: true }
+    );
+
+    if (!updatedMedicine) {
+      return res.status(409).json({
+        success: false,
+        message: 'Conflict: inventory was concurrently modified. Please reload and retry.',
+      });
+    }
+
+    // Record stock corrections like any other adjustment
+    if (quantityDelta !== 0) {
+      await InventoryHistory.create({
+        medicineId: medicine._id,
+        medicineName: updatedMedicine.name,
+        action: 'adjustment',
+        quantityChanged: quantityDelta,
+        previousQuantity: medicine.quantity,
+        newQuantity,
+        reason: reason || 'Edited in inventory form',
+        performedBy: req.user.id,
+      });
+    }
+
+    log('INFO', 'Medicine updated', { medicineId: id, quantityChanged: quantityDelta });
 
     res.status(200).json({
       success: true,
       message: 'Medicine updated successfully',
-      medicine,
+      medicine: updatedMedicine,
     });
   } catch (error) {
     log('ERROR', 'Update medicine error', { error: error.message });

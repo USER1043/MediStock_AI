@@ -23,7 +23,7 @@ jest.unstable_mockModule('../utils/logger.js', () => ({
 }));
 
 const { createBill } = await import('../controllers/billingController.js');
-const { adjustQuantity, createMedicine: createMedicineHandler } = await import(
+const { adjustQuantity, createMedicine: createMedicineHandler, updateMedicine } = await import(
   '../controllers/inventoryController.js'
 );
 const { Medicine } = await import('../models/medicineModel.js');
@@ -309,6 +309,8 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
       expect(after.batches).toHaveLength(2);
       expect(after.quantity).toBe(18);
       expect(batchQty(after, 'B-SOON')).toBe(8);
+      // Version moves so a concurrent bill can't overwrite this top-up
+      expect(after.__v).toBe(med.__v + 1);
     });
 
     test('creates a separate batch for a different expiry instead of overwriting it', async () => {
@@ -347,6 +349,128 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
       expect(after.quantity).toBe(22);
       expect(after.batches).toHaveLength(3);
       expect(batchQty(after, 'B-NEW')).toBe(7);
+    });
+  });
+
+  describe('updateMedicine (inventory form edit)', () => {
+    const batchOf = (med, number) => med.batches.find((b) => b.batchNumber === number);
+    const update = async (med, body) => {
+      const res = mockRes();
+      await updateMedicine(mockReq(body, { id: med._id.toString() }), res);
+      return res;
+    };
+
+    test('edits the named batch in place and leaves other batches alone', async () => {
+      const med = await createMedicine();
+      const soon = batchOf(med, 'B-SOON');
+
+      const res = await update(med, {
+        __v: med.__v,
+        batches: [{ _id: soon._id, batchNumber: 'B-SOON-2', expiryDate: '2027-12-31', rackNumber: 'R7' }],
+      });
+
+      expect(res.statusCode).toBe(200);
+      const after = await Medicine.findById(med._id);
+      expect(after.batches).toHaveLength(2);
+      const edited = after.batches.id(soon._id);
+      expect(edited).toMatchObject({ batchNumber: 'B-SOON-2', rackNumber: 'R7', quantity: 5 });
+      expect(edited.expiryDate.toISOString().slice(0, 10)).toBe('2027-12-31');
+      expect(batchOf(after, 'B-LATE')).toMatchObject({ quantity: 10, rackNumber: 'R1' });
+      expect(after.quantity).toBe(15);
+      // No stock moved, so nothing is logged
+      expect(await InventoryHistory.countDocuments()).toBe(0);
+    });
+
+    test('a batch quantity change moves the total by the same amount and is logged', async () => {
+      const med = await createMedicine();
+      const late = batchOf(med, 'B-LATE');
+
+      const res = await update(med, { __v: med.__v, batches: [{ _id: late._id, quantity: 4 }] });
+
+      expect(res.statusCode).toBe(200);
+      const after = await Medicine.findById(med._id);
+      expect(after.batches.id(late._id).quantity).toBe(4);
+      expect(after.quantity).toBe(9);
+      expect(after.stockStatus).toBe('medium');
+
+      const history = await InventoryHistory.find({ action: 'adjustment' });
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({ quantityChanged: -6, previousQuantity: 15, newQuantity: 9 });
+    });
+
+    test('updates medicine-level fields without touching stock', async () => {
+      const med = await createMedicine();
+
+      const res = await update(med, { __v: med.__v, sellingPrice: 6.5, category: 'Pain Relief', reorderLevel: 40 });
+
+      expect(res.statusCode).toBe(200);
+      const after = await Medicine.findById(med._id);
+      expect(after).toMatchObject({ sellingPrice: 6.5, category: 'Pain Relief', reorderLevel: 40, quantity: 15 });
+      // stockStatus follows the new reorder level
+      expect(after.stockStatus).toBe('low');
+    });
+
+    test('rejects a stale version with 409 and changes nothing', async () => {
+      const med = await createMedicine();
+      // Someone sells in between: the version moves on
+      await createBill(mockReq({ customerName: 'Walk-in', items: [{ medicineId: med._id, quantity: 2 }] }), mockRes());
+
+      const res = await update(med, {
+        __v: med.__v,
+        sellingPrice: 9,
+        batches: [{ _id: batchOf(med, 'B-LATE')._id, quantity: 20 }],
+      });
+
+      expect(res.statusCode).toBe(409);
+      const after = await Medicine.findById(med._id);
+      expect(after.sellingPrice).toBe(5);
+      expect(after.quantity).toBe(13);
+      expect(batchOf(after, 'B-LATE').quantity).toBe(10);
+    });
+
+    test('rejects setting the medicine total directly', async () => {
+      const med = await createMedicine();
+      const res = await update(med, { __v: med.__v, quantity: 99 });
+      expect(res.statusCode).toBe(400);
+      expect((await Medicine.findById(med._id)).quantity).toBe(15);
+    });
+
+    test('rejects a batch _id that does not belong to the medicine', async () => {
+      const med = await createMedicine();
+      const res = await update(med, { batches: [{ _id: new mongoose.Types.ObjectId(), quantity: 1 }] });
+      expect(res.statusCode).toBe(400);
+    });
+
+    test('rejects a negative batch quantity and an invalid expiry', async () => {
+      const med = await createMedicine();
+      const soonId = batchOf(med, 'B-SOON')._id;
+
+      expect((await update(med, { batches: [{ _id: soonId, quantity: -1 }] })).statusCode).toBe(400);
+      expect((await update(med, { batches: [{ _id: soonId, expiryDate: 'not-a-date' }] })).statusCode).toBe(400);
+      expect(batchOf(await Medicine.findById(med._id), 'B-SOON').quantity).toBe(5);
+    });
+
+    test('rejects an edit that would make two batches share a number and expiry', async () => {
+      const med = await createMedicine();
+      const late = batchOf(med, 'B-LATE');
+      const soon = batchOf(med, 'B-SOON');
+
+      const res = await update(med, {
+        batches: [{ _id: soon._id, batchNumber: 'B-LATE', expiryDate: late.expiryDate }],
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(batchOf(await Medicine.findById(med._id), 'B-SOON')).toBeDefined();
+    });
+
+    test('rejects renaming to the name of another medicine', async () => {
+      const med = await createMedicine();
+      await createMedicine({ name: 'Ibuprofen 400mg' });
+
+      const res = await update(med, { name: 'Ibuprofen 400mg' });
+
+      expect(res.statusCode).toBe(409);
+      expect((await Medicine.findById(med._id)).name).toBe('Paracetamol 500mg');
     });
   });
 

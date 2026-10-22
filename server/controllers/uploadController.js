@@ -48,6 +48,8 @@ export const uploadExcel = async (req, res) => {
           });
           // Update total quantity
           existingMedicine.quantity += parseInt(row.quantity) || 0;
+          // Bump __v so concurrent bills/adjustments (which check it) see this stock change
+          existingMedicine.increment();
           await existingMedicine.save();
         } else {
           // Create new parent drug with first batch

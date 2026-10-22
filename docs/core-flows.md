@@ -237,7 +237,7 @@ Alerts older than 24 hours are deleted on each run. Generation is triggered by t
 ## Known limitations
 
 - **Billing atomicity depends on the MongoDB topology.** On a replica set (e.g. Atlas) a bill runs in a transaction. On a standalone server (e.g. the local Docker setup) it falls back to a compensating rollback, which restores each medicine's saved `batches` wholesale and could overwrite a change made by another request in between.
-- **The `__v` concurrency check only catches writers that bump `__v`.** `createBill` and `adjustQuantity` do; plain `findByIdAndUpdate` calls (e.g. `updateMedicine`) don't. The `quantity ≥ qty` filter still prevents overselling.
+- **The `__v` concurrency check only catches writers that bump `__v`.** All stock writers in the controllers do (`createBill`, `adjustQuantity`, `updateMedicine`, `createMedicine`, Excel import, PO receive); seed scripts and direct database edits don't.
 - **Transaction write conflicts return 500.** When two bills collide inside transactions, MongoDB's `WriteConflict` error surfaces as a 500 rather than the 409 "please retry" response.
 - **Near-expiry and expired alerts don't fire.** `generateAlerts` checks `medicine.expiryDate`, but expiry lives on each batch. Only `low_stock` and `overstock` alerts are produced.
 - **Rule-based reorder can fail on zero stock.** `generateReorderSuggestions` sets priority `'Critical'`, which isn't in the PO `priority` enum (`Low | Medium | High`), so `PurchaseOrder.create` throws a validation error for out-of-stock medicines.
