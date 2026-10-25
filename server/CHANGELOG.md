@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/USER1043/MediStock_AI/compare/backend-v1.2.0...backend-v1.2.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **billing:** atomic FEFO batch deduction with transaction and compensating rollback ([1d1121f](https://github.com/USER1043/MediStock_AI/commit/1d1121ff550a64cb8dd51ef0b749a8feeb4f49b5))
+
 ## [1.2.0](https://github.com/USER1043/MediStock_AI/compare/backend-v1.1.0...backend-v1.2.0) (2026-07-28)
 
 
