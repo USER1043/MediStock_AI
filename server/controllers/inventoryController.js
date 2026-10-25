@@ -369,9 +369,33 @@ export const adjustQuantity = async (req, res) => {
       }
     }
 
-    medicine.quantity += numChanged;
-    medicine.stockStatus = getStockStatus(medicine.quantity, medicine.reorderLevel);
-    await medicine.save();
+    const newQuantity = medicine.quantity + numChanged;
+    const newStockStatus = getStockStatus(newQuantity, medicine.reorderLevel);
+
+    // Atomic conditional update with Optimistic Concurrency Control (OCC)
+    const updateFilter = {
+      _id: id,
+      __v: medicine.__v,
+      ...(numChanged < 0 ? { quantity: { $gte: Math.abs(numChanged) } } : {}),
+    };
+
+    const updatePayload = {
+      $set: {
+        quantity: newQuantity,
+        batches: medicine.batches,
+        stockStatus: newStockStatus,
+      },
+      $inc: { __v: 1 },
+    };
+
+    const updatedMedicine = await Medicine.findOneAndUpdate(updateFilter, updatePayload, { new: true });
+
+    if (!updatedMedicine) {
+      return res.status(409).json({
+        success: false,
+        message: 'Conflict: inventory was concurrently modified or quantity changed. Please retry.',
+      });
+    }
 
     await InventoryHistory.create({
       medicineId: id,
@@ -379,7 +403,7 @@ export const adjustQuantity = async (req, res) => {
       action: 'adjustment',
       quantityChanged: numChanged,
       previousQuantity,
-      newQuantity: medicine.quantity,
+      newQuantity,
       reason,
       performedBy: req.user.id,
     });
@@ -389,7 +413,7 @@ export const adjustQuantity = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Quantity adjusted successfully',
-      medicine,
+      medicine: updatedMedicine,
     });
   } catch (error) {
     log('ERROR', 'Adjust quantity error', { error: error.message });

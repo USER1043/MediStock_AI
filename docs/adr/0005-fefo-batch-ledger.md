@@ -10,7 +10,7 @@ Pharmacies lose money when medicines expire on the shelf, and staff waste time l
 
 - Model stock per **batch** (`batchNumber`, `expiryDate`, `quantity`, `rackNumber`) embedded in `Medicine`, alongside a denormalised total `quantity`.
 - Present medicines sorted by earliest batch expiry (`GET /api/inventory`, the billing picker).
-- When deducting stock, consume batches in ascending expiry order (implemented in `adjustQuantity`).
+- When deducting stock, consume batches in ascending expiry order (implemented in `adjustQuantity` and `createBill`).
 - Record every stock movement in `InventoryHistory`.
 - Treat stock received on a purchase order as a new batch.
 
@@ -26,6 +26,6 @@ Pharmacies lose money when medicines expire on the shelf, and staff waste time l
 
 - ✅ Enables expiry-aware UI, rack lookup in the chatbot, and expiry-based alerts.
 - ✅ Adjustments deduct from the right batches automatically.
-- ⚠️ **Billing does not yet deduct at batch level.** `createBill` lowers only the medicine total, so batch quantities drift from the total. Bringing billing in line with `adjustQuantity` (and recording the actual batch per bill line) is the main follow-up.
+- ✅ Billing deducts at batch level, FEFO-style, and records the batch number(s) consumed on each bill line.
 - ⚠️ Keeping `quantity` equal to the batch sum depends on every write path; nothing enforces it.
 - ⚠️ Expiry alerts read a top-level `expiryDate` that doesn't exist, so near-expiry and expired alerts never fire until they're changed to read batch expiries.
