@@ -73,11 +73,12 @@ sequenceDiagram
 
 | Case | Behaviour |
 |------|-----------|
-| Unknown medicine | `404`, bill not created |
-| Requested quantity > total stock | `400 Insufficient stock for X. Available: N` |
+| Unknown medicine | `404`, bill not created; earlier items in the same bill are rolled back |
+| Requested quantity > total stock | `400 Insufficient stock for X. Available: N`; earlier items rolled back |
+| Quantity missing, zero or negative | `400 Invalid quantity` |
 | Customer without email/phone | Bill still created; notifications skipped |
 | Twilio / SMTP not configured or failing | Logged as `WARN`; bill still returned `201` |
-| Two cashiers sell the last units at the same time | Both can pass the stock check (read-then-write), so stock can go negative — see limitations |
+| Two cashiers sell the last units at the same time | The conditional update (`__v` match and `quantity ≥ qty`) lets only one win; the other gets `409 Please retry checkout`. Inside a transaction the loser may get a `500` write conflict instead; see limitations |
 
 ---
 
