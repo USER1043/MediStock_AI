@@ -15,27 +15,16 @@ import { AuditLog } from "../models/auditLogModel.js";
 import { Alert } from "../models/alertModel.js";
 import { Report } from "../models/reportModel.js";
 import { Supplier, PurchaseOrder } from "../models/supplierModels.js";
+import { createSeedClock } from "./seedClock.js";
 
 dotenv.config();
 
 // Generates a random integer between min and max inclusive.
 const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
-// Generates a date object representing a specific number of days ago.
-const daysAgoDate = (daysAgo, hour) => {
-  const d = new Date();
-  d.setDate(d.getDate() - daysAgo);
-  d.setHours(hour ?? rand(8, 21), rand(0, 59), rand(0, 59), 0);
-  return d;
-};
+// Every seeded date is relative to the moment the seed runs, and seeded activity is never after it
+const { daysAgoDate, daysFutureDate } = createSeedClock();
 
-// Generates a date object representing a specific number of days in the future.
-const daysFutureDate = (daysAhead) => {
-  const d = new Date();
-  d.setDate(d.getDate() + daysAhead);
-  d.setHours(12, 0, 0, 0);
-  return d;
-};
 let billSeq = 1000;
 const nextBill = () => `BILL-SEED-${billSeq++}`;
 const SAMPLE_IPS = [
