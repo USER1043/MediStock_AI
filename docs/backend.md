@@ -70,7 +70,8 @@ flowchart LR
 
 Things worth knowing:
 
-- **Audit logging runs after the response.** `auditLogger` only subscribes to the response's `finish` event, so by the time it writes, `protect` has already set `req.user`. The client never waits for the audit write, and a failed audit write can't fail the request. It skips `GET` requests, `/api/auth/login`, and any response with status ≥ 400. Sensitive body keys (`password`, `token`, `secret`, `key`, `auth`) are redacted.
+- **Audit logging runs after the response.** `auditLogger` only subscribes to the response's `finish` event, so by the time it writes, `protect` has already set `req.user`. The client never waits for the audit write, and a failed audit write can't fail the request (it is logged as `ERROR` with the endpoint). It skips `GET` requests and any response with status ≥ 400. Sensitive body keys (`password`, `token`, `secret`, `key`, `auth`) are redacted.
+- **Audit actions come from one table.** At `finish` time `req.path` is relative to the router, so the middleware builds the matched route template (`req.baseUrl + req.route.path`, e.g. `POST /api/inventory/:id/adjust-quantity`) and looks it up in `AUDIT_ROUTES` (`middleware/auditLogger.js`): one row per write route, giving an action and module or an explicit skip. Routes that write their own entry (login and 2FA login, Excel upload, forecast run and retrain, alert resolve) and routes that are not logged (chatbot query, alert generation, 2FA setup) are skips. The stored `endpoint` is the full path without the query string. A write with no row is still recorded, as `OTHER` / `System`, with a `WARN`; `__tests__/audit.coverage.test.js` fails if any write route has no row.
 - **`requestLogger` runs before `protect`**, so the `userId` and `userRole` in request logs are always empty. Controller-level logs carry the user.
 - **CORS** allows requests with no `Origin` (curl, server-to-server) and any origin listed in the comma-separated `FRONTEND_URL`.
 - **`/uploads` static route** serves files with `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'`, and `X-Frame-Options: DENY`, so an uploaded file can't execute as a page.
@@ -131,9 +132,10 @@ Uncaught errors reach `errorHandler`, which returns `{ success: false, message }
 
 - **ES modules** throughout (`"type": "module"`); import paths include the `.js` extension.
 - **Models export named bindings**, guarded against re-compilation (`mongoose.models.X || mongoose.model(...)`), which lets tests re-import safely.
-- **`server.js` exports `app`** (`export default app`) so Supertest can drive it without opening a port.
+- **`server.js` exports `app`** (`export default app`) so Supertest can drive it without opening a port. It mounts the API routers from `routes/index.js` (`apiRouters` / `mountApiRouters`), which tests use to build the same API without connecting to the database.
 - **Logging:** use `log(level, message, data)` from `utils/logger.js` rather than `console.*`. Levels are `INFO`, `WARN` and `ERROR`.
-- **Explicit audit entries:** for richer detail than the generic middleware captures, call `createAuditEntry({...})` from the controller. Login and Excel upload do this.
+- **Audit rows for new routes:** every new `POST`/`PUT`/`PATCH`/`DELETE` route needs a row in `AUDIT_ROUTES` (an action and module from the `AuditLog` enums, or a skip); add new actions or modules to `AUDIT_ACTIONS` / `AUDIT_MODULES` and to `src/pages/ActivityLog.jsx`. The coverage test checks all three.
+- **Explicit audit entries:** for richer detail than the generic middleware captures, call `createAuditEntry({...})` from the controller and mark the route as a skip in `AUDIT_ROUTES` so it is logged once. Login, Excel upload, forecast run/retrain and alert resolve do this.
 - **Generated identifiers:** bills are `BILL-<timestamp>-<random>`; AI purchase orders are `PO-AI-<timestamp>-<random>`.
 
 ---
@@ -161,8 +163,6 @@ Uncaught errors reach `errorHandler`, which returns `{ success: false, message }
 
 - **Inconsistent error handling.** Most controllers catch their own errors and return `500` with the raw `error.message`, so `errorHandler` is rarely reached, and internal messages can leak to clients.
 - **No input validation layer.** `express-validator` is installed but unused; controllers check fields by hand. `saveDemandParameters` passes `req.body` straight into `findOneAndUpdate`.
-- **Audit action mapping is coarse.** Any `POST`/`PUT` under `/api/inventory` is recorded as `MEDICINE_CREATED`. The category route maps to `CATEGORY_CREATED` / `Category Management`, which are not in the `AuditLog` enums, so those audit writes fail validation and are dropped (logged as `ERROR`).
-- **Excel uploads are audited twice**: once explicitly in the controller, once by the middleware.
 - **N+1 queries** in loops (billing items, forecasting) issue one or more queries per medicine.
 - `getInventoryIntelligence` loads **all** sale history into memory and filters it per medicine (O(medicines × history)).
 

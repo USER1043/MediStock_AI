@@ -114,8 +114,8 @@ User-management safeguards in `authController`: you can't delete yourself, you c
 
 | Mechanism | What it records |
 |-----------|-----------------|
-| `auditLogger` middleware | Every successful `POST/PUT/PATCH/DELETE`: user, action and module (inferred from the path), sanitised body and params, IP (honours `X-Forwarded-For`), method, endpoint, status |
-| `createAuditEntry()` / direct `AuditLog.create` | Login (`USER_LOGIN`, including 2FA logins), Excel upload details, forecast runs |
+| `auditLogger` middleware | Every successful `POST/PUT/PATCH/DELETE`: user, action and module (looked up by route in `AUDIT_ROUTES`, e.g. `MEDICINE_UPDATED` / `Inventory`), sanitised body and params, IP (honours `X-Forwarded-For`), method, full endpoint, status. Not logged: failed requests (status ≥ 400), chatbot queries, alert regeneration, 2FA setup (enabling 2FA at verify-setup is `TWO_FA_ENABLED`) |
+| `createAuditEntry()` / direct `AuditLog.create` | Login (`USER_LOGIN`, including 2FA logins), Excel upload details (`EXCEL_UPLOAD`), forecast runs and retrains (`FORECAST_RUN`, `MODEL_RETRAINED`), alert resolution (`ALERT_RESOLVED`). The middleware skips these routes, so each is logged once |
 | Body sanitising | Keys `password`, `token`, `secret`, `key` and `auth` become `[REDACTED]` (top level only) |
 
 Owners browse the log at `/activity-log` (`GET /api/audit`, `GET /api/audit/stats`).

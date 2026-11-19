@@ -137,7 +137,7 @@ Traces each feature from the screen to the data.
 | Concern | How it's handled | Where |
 |---------|------------------|-------|
 | Logging | `log(level, message, data)` writes to console and a daily file `server/logs/app-YYYY-MM-DD.log` | `utils/logger.js` |
-| Auditing | Every successful `POST/PUT/PATCH/DELETE` is recorded after the response is sent; some actions (login, forecast run, Excel upload) are also written explicitly | `middleware/auditLogger.js` |
+| Auditing | Every successful `POST/PUT/PATCH/DELETE` is recorded after the response is sent, with an action and module looked up by route; a few routes (login, forecast run, Excel upload, alert resolve) write their own entry instead | `middleware/auditLogger.js` |
 | Errors | Controllers mostly `try/catch` and return `{ success: false, message, error }`; uncaught errors go to `errorHandler` | `middleware/errorHandler.js` |
 | Authorization | `protect` (JWT) + `authorize(...roles)` / `ownerOnly` per route; `ProtectedRoute` on the client | `middleware/auth.js`, `src/components/ProtectedRoute.jsx` |
 | Notifications | Email and WhatsApp helpers that degrade gracefully if credentials are missing | `utils/notifications.js` |
