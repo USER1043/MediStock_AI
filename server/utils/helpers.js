@@ -94,13 +94,19 @@ export const describeBatches = (batches) =>
     .join('; ');
 
 // Detect anomalies in uploaded data
+// The row number the user sees in Excel for a record from XLSX.utils.sheet_to_json. The sheet's header is
+// row 1; sheet_to_json skips blank rows, so the position in the array can drift from the sheet, but each
+// record carries its 0-based sheet row as __rowNum__.
+export const excelRowNumber = (row, index) =>
+  Number.isInteger(row?.__rowNum__) ? row.__rowNum__ + 1 : index + 2;
+
 export const detectAnomalies = (data) => {
   const anomalies = [];
 
   data.forEach((row, index) => {
     if (row.quantity < 0) {
       anomalies.push({
-        row: index + 1,
+        row: excelRowNumber(row, index),
         field: 'quantity',
         issue: 'Negative quantity detected',
       });
@@ -108,7 +114,7 @@ export const detectAnomalies = (data) => {
 
     if (row.quantity > 100000) {
       anomalies.push({
-        row: index + 1,
+        row: excelRowNumber(row, index),
         field: 'quantity',
         issue: 'Unusually high stock quantity',
       });
@@ -116,7 +122,7 @@ export const detectAnomalies = (data) => {
 
     if (new Date(row.expiryDate) < new Date()) {
       anomalies.push({
-        row: index + 1,
+        row: excelRowNumber(row, index),
         field: 'expiryDate',
         issue: 'Expiry date in the past',
       });
@@ -124,7 +130,7 @@ export const detectAnomalies = (data) => {
 
     if (row.sellingPrice < row.purchasePrice) {
       anomalies.push({
-        row: index + 1,
+        row: excelRowNumber(row, index),
         field: 'price',
         issue: 'Selling price is less than purchase price',
       });

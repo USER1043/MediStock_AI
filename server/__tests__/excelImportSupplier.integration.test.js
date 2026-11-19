@@ -124,7 +124,7 @@ describe('Excel import: supplier column', () => {
     expect(log.recordsSuccessful).toBe(2);
     expect(log.recordsFailed).toBe(1);
     expect(log.errors).toEqual([
-      { row: 2, message: "Row 2: supplier 'Nobody Ltd' not found — add it on the Suppliers page first" },
+      { row: 3, message: "Row 3: supplier 'Nobody Ltd' not found — add it on the Suppliers page first" },
     ]);
     expect(await Medicine.findOne({ name: 'Bad' })).toBeNull();
     expect((await Medicine.findOne({ name: 'Good2' })).supplier).toBe(String(s._id));
@@ -192,7 +192,7 @@ describe('Excel import: supplier column', () => {
     expect(log.recordsSuccessful).toBe(1);
     expect(log.recordsFailed).toBe(2);
     expect((await Medicine.findOne({ name: 'Lit' })).supplier).toBe(String(dots._id));
-    expect(log.errors.map((e) => e.row)).toEqual([2, 3]);
+    expect(log.errors.map((e) => e.row)).toEqual([3, 4]);
   });
 
   test('a name that matches several suppliers only by case is rejected, an exact match still works', async () => {
@@ -214,6 +214,33 @@ describe('Excel import: supplier column', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  describe('row numbers match the Excel sheet', () => {
+    test('errors and anomalies use the Excel row (header = row 1), even across a blank row', async () => {
+      await newSupplier('MedCorp');
+      const rows = [
+        baseRow('First', { supplier: 'MedCorp' }),
+        baseRow('Ghost', { supplier: 'Nobody Ltd' }),
+        baseRow('Negative', { supplier: 'MedCorp', quantity: -5 }),
+      ];
+      const headers = Object.keys(rows[0]);
+      // Excel: row 1 header, row 2 First, row 3 blank, row 4 Ghost, row 5 Negative
+      const aoa = [headers, headers.map((h) => rows[0][h]), [], headers.map((h) => rows[1][h]), headers.map((h) => rows[2][h])];
+      const file = path.join(tmpDir, `blank_${Date.now()}.xlsx`);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Data');
+      XLSX.writeFile(wb, file);
+      const res = mockRes();
+      await uploadExcel(
+        { file: { path: file, originalname: 'in.xlsx', size: 1 }, user: { id: userId, username: 'u' }, headers: {}, socket: {} },
+        res
+      );
+
+      const log = res.body.uploadLog;
+      expect(log.errors).toEqual([{ row: 4, message: "Row 4: supplier 'Nobody Ltd' not found — add it on the Suppliers page first" }]);
+      expect(log.anomalies.filter((a) => a.field === 'quantity').map((a) => a.row)).toEqual([5]);
+    });
   });
 });
 

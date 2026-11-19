@@ -2,7 +2,7 @@ import XLSX from 'xlsx';
 import fs from 'fs';
 import { Medicine } from '../models/medicineModel.js';
 import { AuditLog } from '../models/auditLogModel.js';
-import { detectAnomalies, addStockToBatches, requestPath } from '../utils/helpers.js';
+import { detectAnomalies, addStockToBatches, requestPath, excelRowNumber } from '../utils/helpers.js';
 import { buildSupplierLookup, supplierDisplayNames } from '../utils/supplierRef.js';
 import log from '../utils/logger.js';
 
@@ -31,7 +31,7 @@ export const uploadExcel = async (req, res) => {
 
     let recordsSuccessful = 0;
     let recordsFailed = 0;
-    const rowErrors = []; // { row, message }, row numbered like the anomalies (1 = first data row)
+    const rowErrors = []; // { row, message }; row is the Excel row number (header = row 1), as in the anomalies
 
     // Suppliers are matched in memory: one query for the whole import
     const suppliers = await buildSupplierLookup();
@@ -92,8 +92,9 @@ export const uploadExcel = async (req, res) => {
         recordsSuccessful++;
       } catch (error) {
         recordsFailed++;
-        rowErrors.push({ row: index + 1, message: `Row ${index + 1}: ${error.message}` });
-        log('WARN', 'Failed to process row', { row: index + 1, error: error.message });
+        const rowNumber = excelRowNumber(row, index);
+        rowErrors.push({ row: rowNumber, message: `Row ${rowNumber}: ${error.message}` });
+        log('WARN', 'Failed to process row', { row: rowNumber, error: error.message });
       }
     }
 
