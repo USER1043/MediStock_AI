@@ -30,6 +30,7 @@ flowchart TB
     subgraph dom["Domain and infrastructure"]
         models["models/ — Mongoose schemas"]
         ml["ml/ — forecasting"]
+        services["services/ — alert generation"]
         utils["utils/ — logger · notifications<br/>pdfGenerator · helpers"]
     end
 
@@ -38,11 +39,12 @@ flowchart TB
     routes --> ctrl
     ctrl --> models
     ctrl --> ml
+    ctrl --> services
     ctrl --> utils
     ml --> models
 ```
 
-**Rule of thumb when adding code:** routers declare *who may call what*; controllers do the work; anything reused across controllers goes into `utils/` (pure helpers) or `ml/` (forecasting).
+**Rule of thumb when adding code:** routers declare *who may call what*; controllers do the work; anything reused across controllers goes into `utils/` (pure helpers), `services/` (stateful logic shared by several routes, e.g. alert generation) or `ml/` (forecasting).
 
 ---
 
@@ -143,6 +145,7 @@ Uncaught errors reach `errorHandler`, which returns `{ success: false, message }
 | `utils/logger.js` | Console + daily file logging to `server/logs/` |
 | `utils/notifications.js` | `sendEmailNotification` (Nodemailer), `sendWhatsAppNotification` (Twilio), `sendBillNotification`, `sendAlertNotification`. The Twilio client is created only if credentials exist. |
 | `utils/pdfGenerator.js` | Invoice PDFs via PDFKit (plus an unused prescription-report generator) |
+| `services/alertService.js` | Alert generation, lazy refresh (15 min, per process), acknowledgement rules, 90-day pruning, and the `markAlertsStaleOnWrite` middleware mounted in `server.js`; see [core-flows.md](core-flows.md#5-alert-generation) |
 | `utils/helpers.js` | JWT generation, expiry maths, stock status, FEFO sort, anomaly detection, bill number, a simple demand-forecast helper used by `/api/reports/forecast` |
 
 ---
@@ -160,7 +163,7 @@ Uncaught errors reach `errorHandler`, which returns `{ success: false, message }
 - **No input validation layer.** `express-validator` is installed but unused; controllers check fields by hand. `saveDemandParameters` passes `req.body` straight into `findOneAndUpdate`.
 - **Audit action mapping is coarse.** Any `POST`/`PUT` under `/api/inventory` is recorded as `MEDICINE_CREATED`. The category route maps to `CATEGORY_CREATED` / `Category Management`, which are not in the `AuditLog` enums, so those audit writes fail validation and are dropped (logged as `ERROR`).
 - **Excel uploads are audited twice**: once explicitly in the controller, once by the middleware.
-- **N+1 queries** in loops (billing items, alert generation, forecasting) issue one or more queries per medicine.
+- **N+1 queries** in loops (billing items, forecasting) issue one or more queries per medicine.
 - `getInventoryIntelligence` loads **all** sale history into memory and filters it per medicine (O(medicines × history)).
 
 ## Future improvements
@@ -175,4 +178,4 @@ Uncaught errors reach `errorHandler`, which returns `{ success: false, message }
 
 ## Related files
 
-`server/server.js` · `server/routes/` · `server/middleware/` · `server/controllers/` · `server/utils/` · `server/config/database.js`
+`server/server.js` · `server/routes/` · `server/middleware/` · `server/controllers/` · `server/services/` · `server/utils/` · `server/config/database.js`

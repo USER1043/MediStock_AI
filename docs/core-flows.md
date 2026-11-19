@@ -215,16 +215,60 @@ Expected columns: `name, category, batchNumber, expiryDate, quantity, rackNumber
 
 ## 5. Alert generation
 
-`POST /api/alerts/generate` scans every medicine and creates at most one unresolved alert per `(medicine, alertType)`:
+`services/alertService.js` owns alert generation; the alert route handlers are thin wrappers.
 
-| Type | Condition | Severity |
-|------|-----------|----------|
-| `low_stock` | `quantity ≤ reorderLevel / 2` | critical |
-| `near_expiry` | any batch with stock left expires within 7 days | warning |
-| `expired` | any batch with stock left is past its expiry date | critical |
-| `overstock` | `quantity > 3 × reorderLevel` | info |
+### When it runs
 
-Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batches with no stock left are ignored, and the alert message lists each affected batch with its expiry, rack and quantity. Alerts older than 24 hours are deleted on each run. Generation is triggered by the client; there is no background schedule.
+There is no scheduler. Alerts are regenerated **lazily, when they are read**:
+
+- `GET /api/alerts`, `GET /api/alerts/critical` and `GET /api/reports/dashboard/analytics` call `alertService.refreshIfStale()` before reading. It runs generation if the last run is **15 minutes** old or more, or if stock changed since (see below); otherwise it does nothing.
+- Concurrent reads share **one in-flight run** instead of starting several.
+- A successful `POST`/`PUT`/`PATCH`/`DELETE` under `/api/inventory`, `/api/billing`, `/api/uploads` or `/api/suppliers` marks alerts stale (`markAlertsStaleOnWrite` in `server.js`), so the next read regenerates straight away.
+- `POST /api/alerts/generate` (the *Refresh* button on the Alerts page) forces a run. If a run is already in progress it waits for it and then runs again.
+- If a lazy run fails, the read still returns the stored alerts and the next read tries again.
+
+**Where the last-run time lives:** in memory, per Node process (`createAlertService` closure). A restarted process, or each new serverless instance, regenerates on its first read; two processes keep separate clocks and may both run. A partial unique index (`one_current_alert_per_medicine_type`) keeps such overlapping runs from creating duplicate alerts. The clock, the 15-minute threshold and the retention period are injectable (`createAlertService({ clock, staleAfterMs, retentionMs })`) for tests.
+
+### What it checks
+
+| Type | Condition | Severity | Fingerprint |
+|------|-----------|----------|-------------|
+| `low_stock` | `quantity ≤ reorderLevel / 2` | critical | `['out_of_stock']` if `quantity ≤ 0`, else `['low']` |
+| `near_expiry` | any batch with stock left expires within 7 days | warning | the affected batches, `"<batchNumber>@<YYYY-MM-DD>"` |
+| `expired` | any batch with stock left is past its expiry date | critical | the affected batches |
+| `overstock` | `quantity > 3 × reorderLevel` | info | `['overstock']` |
+
+Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batches with no stock left are ignored. Expiry alerts store a snapshot of the affected batches (number, expiry, rack, quantity), which the Alerts page shows as a table; the message lists them too.
+
+### Lifecycle
+
+For each `(medicine, alertType)` there is at most one **current** alert (`isCurrent: true`). Each run compares what holds now with it:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Open: condition starts holding
+    Open --> Open: fingerprint or numbers change (updated in place, no duplicate)
+    Open --> AutoResolved: condition stops holding (autoResolved, clearedAt)
+    Open --> Acknowledged: user resolves (resolvedBy, resolvedAt)
+    Acknowledged --> Acknowledged: same situation, or less (nothing new)
+    Acknowledged --> Superseded: something new (new Open alert raised)
+    Acknowledged --> Cleared: condition stops holding (clearedAt)
+    AutoResolved --> [*]
+    Superseded --> [*]
+    Cleared --> [*]
+```
+
+- **Open, condition still holds:** the alert is updated in place (message, batches, severity). If its fingerprint changed, e.g. a second batch started expiring, `lastChangedAt` moves too.
+- **Condition no longer holds** (batch sold out or removed, restocked above the threshold, no longer overstocked, medicine deleted): the alert stops being current and gets `clearedAt`. If nobody had resolved it, the system resolves it (`autoResolved: true`, `resolvedAt`).
+- **Resolve = acknowledge.** A user-resolved alert stays current and stops new alerts **while the situation is the same or smaller**: for expiry, no batch outside the acknowledged set (one of two acknowledged batches selling out is not news); for low stock, the same level, or "out of stock" acknowledged and stock now merely low. When something new happens (a batch outside the set starts expiring, "low" becomes "out of stock"), the acknowledged alert is retired (`isCurrent: false`) and a new open alert is raised. If the condition clears and later returns, that is a new alert even with the same fingerprint, because the acknowledged alert stopped being current when it cleared.
+
+### Resolving
+
+`PUT /api/alerts/:id/resolve` sets `resolvedBy`, `resolvedByName` and `resolvedAt` with a conditional update (409 if it was already resolved, 404 for unknown or malformed ids) and writes an `ALERT_RESOLVED` / `Alerts` activity-log entry with the medicine, type and message. The generic audit middleware skips this route so there is exactly one entry.
+
+### Retention
+
+Runs no longer delete alerts after 24 hours. They delete only **closed** alerts (resolved and no longer current) **90 days after they closed** (`clearedAt`, or `resolvedAt` for superseded alerts). Open alerts and acknowledged-but-current alerts are never pruned, since the latter are what stop an acknowledged alert from coming back. Ninety days keeps a quarter of history for review on the Alerts page ("Show resolved"); the volume is small (a few alerts per medicine per episode); and the resolution itself is also kept in the activity log.
 
 ---
 
@@ -249,7 +293,7 @@ Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batche
 - Share the FEFO deduction logic between `createBill` and `adjustQuantity` instead of duplicating it.
 - Validate PO status transitions server-side with an explicit state machine.
 - Capture the real expiry and rack when receiving a PO.
-- Run alert generation on a schedule.
+- Run alert generation on a schedule as well, so alerts can be pushed (email/WhatsApp) without anyone opening the app, and keep the last-run time in the database if the API runs as several instances.
 
 ---
 
@@ -259,5 +303,5 @@ Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batche
 - `server/controllers/forecastController.js`, `server/ml/demandForecast.js`
 - `server/controllers/supplierController.js`
 - `server/controllers/uploadController.js`, `server/middleware/fileUpload.js`
-- `server/controllers/alertController.js`
-- `src/pages/Billing.jsx`, `src/pages/ai/ForecastReview.jsx`, `src/pages/reorder/ReorderReview.jsx`, `src/pages/ExcelUpload.jsx`
+- `server/services/alertService.js`, `server/controllers/alertController.js`
+- `src/pages/Alerts.jsx`, `src/pages/Billing.jsx`, `src/pages/ai/ForecastReview.jsx`, `src/pages/reorder/ReorderReview.jsx`, `src/pages/ExcelUpload.jsx`

@@ -18,7 +18,7 @@ flowchart TB
 
     router --> layout["Layout (sidebar, header, Chatbot)<br/>renders Outlet"]
     layout --> pr["ProtectedRoute allowedRoles=[…]"]
-    pr --> both["owner + staff<br/>Dashboard · Inventory · MedicineInventory<br/>Billing · Customers · ExcelUpload<br/>SupplierManagement · ReorderReview · ForecastReview"]
+    pr --> both["owner + staff<br/>Dashboard · Alerts · Inventory · MedicineInventory<br/>Billing · Customers · ExcelUpload<br/>SupplierManagement · ReorderReview · ForecastReview"]
     pr --> own["owner only<br/>StockIntelligence · Reports · FinancialReports<br/>UserManagement · ActivityLog · DemandSetup"]
 
     both --> ax["utils/axiosConfig.js<br/>axios + Bearer interceptor"]
@@ -37,6 +37,7 @@ flowchart TB
 | `/` | `Landing.jsx` | public |
 | `/login` | `Login.jsx` | public |
 | `/dashboard` | `Dashboard.jsx` | owner, staff |
+| `/alerts` | `Alerts.jsx` | owner, staff |
 | `/inventory` | `Inventory.jsx` ("Live Stock") | owner, staff |
 | `/medicine-inventory` | `MedicineInventory.jsx` ("Medicine DB") | owner, staff |
 | `/billing` | `Billing.jsx` ("Billing POS") | owner, staff |
@@ -116,7 +117,8 @@ Set `VITE_API_BASE_URL` in the root `.env` so both point to the same server.
 
 | Page | Main API calls | Notes |
 |------|----------------|-------|
-| Dashboard | `/reports/dashboard/analytics`, `/reports/sales`, `/suppliers` | KPI tiles + charts |
+| Dashboard | `/reports/dashboard/analytics`, `/reports/sales`, `/suppliers` | KPI tiles + charts; Critical Alerts tile and Live Alerts link to `/alerts` |
+| Alerts | `/alerts`, `POST /alerts/generate`, `PUT /alerts/:id/resolve` | Type/severity filters, show-resolved toggle, Resolve and Refresh. `Layout.jsx` polls `/alerts/critical` (on navigation, every 60 s, and on the `medistock:alerts-changed` event) for the sidebar badge |
 | Billing | `/inventory`, `/customers/search`, `POST /billing` | FEFO-sorted medicine picker; cart; 12% GST computed on the server |
 | Inventory / MedicineInventory | `/inventory/*` | Batch table, adjust quantity, low stock / near expiry / expired views |
 | ExcelUpload | `POST /uploads/excel`, `GET /uploads`, `/uploads/export`, `POST /forecast/retrain` | Shows anomalies and success/failure counts; triggers a forecast re-run after a successful import |

@@ -71,11 +71,13 @@ Base URL (local): `http://localhost:5000/api`
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/` | any | All alerts |
-| GET | `/critical` | any | Critical, unresolved alerts |
+| GET | `/` | any | Alerts, unresolved first, then critical → info, newest change first. Query: `resolved=true\|false`, `type=low_stock\|near_expiry\|expired\|overstock`, `severity=critical\|warning\|info`. Regenerates first if stale. |
+| GET | `/critical` | any | Unresolved critical alerts (`count` drives the sidebar badge). Regenerates first if stale. |
 | GET | `/recommendations` | any | Medicine recommendations |
-| POST | `/generate` | owner, staff | Scan inventory and create alerts (see [core-flows.md](core-flows.md#5-alert-generation)) |
-| PUT | `/:id/resolve` | owner, staff | Mark resolved |
+| POST | `/generate` | owner, staff | Force a generation run. Returns `created`, `updated`, `autoResolved`, `pruned` counts and the new alerts in `alerts`. |
+| PUT | `/:id/resolve` | owner, staff | Acknowledge: records `resolvedBy`/`resolvedByName`/`resolvedAt` and writes an `ALERT_RESOLVED` activity entry. `409` if already resolved, `404` if not found. |
+
+The list endpoints and `/generate` also return `lastGeneratedAt` (this process's last run, or `null`) and `refreshIntervalMinutes` (15). "Stale" means the last run is 15+ minutes old or stock changed since; see [core-flows.md](core-flows.md#5-alert-generation) for generation, acknowledgement and retention.
 
 ## Uploads (Excel) — `/api/uploads`
 
