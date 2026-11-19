@@ -13,6 +13,7 @@ const { generateAlerts } = await import('../controllers/alertController.js');
 const { getDashboardAnalytics } = await import('../controllers/reportController.js');
 const { Medicine } = await import('../models/medicineModel.js');
 const { Alert } = await import('../models/alertModel.js');
+const { alertService } = await import('../services/alertService.js');
 
 const DAY = 24 * 60 * 60 * 1000;
 const daysFromNow = (n) => new Date(Date.now() + n * DAY);
@@ -50,6 +51,7 @@ let server;
 beforeAll(async () => {
   server = await MongoMemoryServer.create();
   await mongoose.connect(server.getUri());
+  await Alert.init(); // build the unique "one current alert" index before the tests run
 }, 120000);
 
 afterAll(async () => {
@@ -59,6 +61,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await Promise.all([Medicine.deleteMany({}), Alert.deleteMany({})]);
+  alertService.reset();
 });
 
 describe('generateAlerts against a real database', () => {
@@ -92,16 +95,18 @@ describe('generateAlerts against a real database', () => {
     expect(await alertsOf(med._id, 'near_expiry')).toHaveLength(1);
   });
 
-  test('a resolved expiry alert does not stop a new one for a batch that is still expiring', async () => {
+  // Resolving now means "acknowledged": the same batches expiring again must not re-raise it.
+  // (Before the alerts page, a resolved alert was followed by a fresh one on the next run.)
+  test('a resolved expiry alert stays acknowledged while the same batch is still expiring', async () => {
     const med = await addMedicine('Cetirizine', [{ batchNumber: 'SOON-1', inDays: 2, quantity: 10 }]);
     await invoke(generateAlerts);
-    await Alert.updateMany({ medicineId: med._id }, { isResolved: true });
+    await Alert.updateMany({ medicineId: med._id }, { isResolved: true, resolvedAt: new Date() });
 
     await invoke(generateAlerts);
 
     const alerts = await alertsOf(med._id, 'near_expiry');
-    expect(alerts).toHaveLength(2);
-    expect(alerts.filter((a) => !a.isResolved)).toHaveLength(1);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].isResolved).toBe(true);
   });
 
   test('batches with no stock left raise no expiry alerts', async () => {

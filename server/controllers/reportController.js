@@ -2,6 +2,7 @@ import { Medicine } from '../models/medicineModel.js';
 import { Bill } from '../models/billModel.js';
 import { InventoryHistory } from '../models/inventoryHistoryModel.js';
 import { Alert } from '../models/alertModel.js';
+import { alertService } from '../services/alertService.js';
 import { calculateDemandForecast, classifyMovement, getExpiringBatches } from '../utils/helpers.js';
 import log from '../utils/logger.js';
 
@@ -407,6 +408,8 @@ export const getDashboardAnalytics = async (req, res) => {
       }))
       .sort((a, b) => a.expiryDate - b.expiryDate);
 
+    // Alerts are generated lazily: regenerate first if the last run is stale, so the counts are real
+    await alertService.refreshIfStale();
     const [criticalAlerts, warningAlerts] = await Promise.all([
       Alert.countDocuments({ severity: 'critical', isResolved: false }),
       Alert.countDocuments({ severity: 'warning', isResolved: false }),

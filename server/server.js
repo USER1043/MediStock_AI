@@ -25,6 +25,7 @@ import categoryRoutes from './routes/categoryRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
 import forecastRoutes from './routes/forecastRoutes.js';
 import { auditLogger } from './middleware/auditLogger.js';
+import { markAlertsStaleOnWrite } from './services/alertService.js';
 
 // Load environment variables
 dotenv.config();
@@ -58,6 +59,9 @@ app.use(requestLogger);
 app.use(auditLogger);  // async fire-and-forget — logs after response is sent
 
 // API Routes
+// Stock-changing requests make stored alerts stale, so the next alert read regenerates them
+app.use(['/api/inventory', '/api/billing', '/api/uploads', '/api/suppliers'], markAlertsStaleOnWrite());
+
 app.use('/api/auth', authRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/inventory', inventoryRoutes);

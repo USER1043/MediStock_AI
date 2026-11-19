@@ -283,14 +283,16 @@ export default function Dashboard() {
               value={kpis.nearExpiryCount}
               sub="expiring within 7 days"
             />
-            <KpiCard
-              icon={<FaBell className="text-orange-500" />}
-              bgClass="bg-orange-50"
-              colorClass="border-orange-400"
-              label="Critical Alerts"
-              value={kpis.activeCriticalAlerts}
-              sub="unresolved critical alerts"
-            />
+            <Link to="/alerts" className="block rounded-xl hover:ring-2 hover:ring-orange-300 transition" title="Open the Alerts page">
+              <KpiCard
+                icon={<FaBell className="text-orange-500" />}
+                bgClass="bg-orange-50"
+                colorClass="border-orange-400"
+                label="Critical Alerts"
+                value={kpis.activeCriticalAlerts}
+                sub="unresolved · view alerts →"
+              />
+            </Link>
             {/* Revenue card — owner only */}
             {isOwner && (
               <>
@@ -498,7 +500,12 @@ export default function Dashboard() {
 
         {/* ── Section 3: Live Alerts Panel (all roles) ─────────────────── */}
         <section>
-          <SectionHeader title="Live Alerts" icon={<FaBell />} />
+          <div className="flex items-center justify-between">
+            <SectionHeader title="Live Alerts" icon={<FaBell />} />
+            <Link to="/alerts" className="mb-4 text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline">
+              View all alerts →
+            </Link>
+          </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Low Stock */}
             <div className="bg-white rounded-xl shadow-md p-5">

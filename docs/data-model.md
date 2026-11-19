@@ -104,7 +104,13 @@ erDiagram
     ALERT {
         string alertType "low_stock | near_expiry | expired | overstock"
         string severity "critical | warning | info"
+        string_array fingerprint
+        objectId batchId "expiry alerts: Medicine.batches[]._id"
+        boolean isCurrent
         boolean isResolved
+        objectId resolvedBy
+        boolean autoResolved
+        date clearedAt
     }
     AUDIT_LOG {
         string action "USER_LOGIN, BILL_GENERATED, ..."
@@ -137,10 +143,28 @@ erDiagram
 | `Supplier` (`supplierModels.js`) | Supplier directory + performance score | suppliers, PO receive | `supplier_name` unique |
 | `PurchaseOrder` (`supplierModels.js`) | Drafts and live orders | forecast, suppliers | `order_number` unique |
 | `InventoryHistory` (`inventoryHistoryModel.js`) | Append-only stock movement ledger | billing, adjust | — |
-| `Alert` (`alertModel.js`) | Stock/expiry alerts | alerts | — |
+| `Alert` (`alertModel.js`) | Stock/expiry alerts and their history | `services/alertService.js`, resolve endpoint | Partial unique `{medicineId, alertType, batchId}` where `isCurrent: true` (one current alert per batch and type for expiry alerts; per medicine and type for stock alerts, whose `batchId` is `null`); `{isResolved, severity}` |
 | `AuditLog` (`auditLogModel.js`) | Append-only activity trail | middleware + explicit calls | `{timestamp:-1}`, `{userId:1,timestamp:-1}`, `{module:1,timestamp:-1}` |
 | `ForecastParameters` (`forecastModel.js`) | Singleton forecasting config | forecast | Field ranges: horizon 1–12, lead time 1–60, safety 0–100 |
 | `Report` (`reportModel.js`) | Stored report snapshots | seed data | — |
+
+### Alert fields
+
+| Field | Meaning |
+|-------|---------|
+| `medicineId`, `medicineName` | The medicine (name copied so history stays readable after a delete) |
+| `alertType`, `severity`, `message` | What is wrong; the message is refreshed while the alert is open |
+| `batchId` | Expiry alerts (`near_expiry`, `expired`): the `_id` of the batch subdocument in `Medicine.batches` the alert is about. `null` for `low_stock` and `overstock` |
+| `batch` | Snapshot of that batch (`batchNumber`, `expiryDate`, `rackNumber`, `quantity`), refreshed while the alert is open; `null` for stock alerts |
+| `fingerprint` | The situation, compared between runs: `[expiry day]` for expiry alerts, `['low']` / `['out_of_stock']` for low stock, `['overstock']` |
+| `isCurrent` | `true` for the one alert describing the ongoing situation of its medicine and type; `false` once the condition cleared or a newer alert replaced it |
+| `createdAt`, `lastChangedAt` | When raised; when the fingerprint last changed |
+| `isResolved`, `resolvedAt` | Resolved by a user or by the system |
+| `resolvedBy`, `resolvedByName` | The user who resolved (acknowledged) it; `null` when the system did |
+| `autoResolved` | `true` when the system resolved it because the condition stopped holding |
+| `clearedAt` | When the condition was seen to stop holding (also set on user-resolved alerts) |
+
+Closed alerts (`isResolved` and not `isCurrent`) are deleted 90 days after they closed; see [core-flows.md](core-flows.md#5-alert-generation).
 
 **Categories are not a collection.** `GET /api/categories` returns `Medicine.distinct('category')`. Creating or approving a category is a no-op that returns a message.
 

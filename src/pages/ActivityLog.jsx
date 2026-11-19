@@ -78,6 +78,8 @@ const detailsText = (details) => {
     if (details.recordsSuccessful !== undefined) parts.push(`✓ ${details.recordsSuccessful} ok`);
     if (details.recordsFailed !== undefined) parts.push(`✗ ${details.recordsFailed} failed`);
     if (details.role) parts.push(`Role: ${details.role}`);
+    if (details.medicineName) parts.push(`Medicine: ${details.medicineName}`);
+    if (details.alertType) parts.push(`Alert: ${details.alertType.replace('_', ' ')}`);
     if (details.body && typeof details.body === 'object') {
         const keys = Object.keys(details.body).filter(k => !['password', 'token'].includes(k)).slice(0, 3);
         keys.forEach(k => parts.push(`${k}: ${String(details.body[k]).slice(0, 30)}`));

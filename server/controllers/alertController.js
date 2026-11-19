@@ -1,110 +1,36 @@
+import mongoose from 'mongoose';
 import { Alert } from '../models/alertModel.js';
 import { Medicine } from '../models/medicineModel.js';
 import { InventoryHistory } from '../models/inventoryHistoryModel.js';
-import { getExpiringBatches, describeBatches } from '../utils/helpers.js';
+import { alertService, compareAlerts } from '../services/alertService.js';
+import { createAuditEntry } from '../middleware/auditLogger.js';
 import log from '../utils/logger.js';
 
-// Generate alerts
+// Alert generation itself lives in services/alertService.js; these handlers stay thin.
+const ALERT_TYPES = ['low_stock', 'near_expiry', 'expired', 'overstock'];
+const SEVERITIES = ['critical', 'warning', 'info'];
+
+const MEDICINE_FIELDS = 'name category quantity';
+
+const freshness = () => ({
+  lastGeneratedAt: alertService.lastRunAt,
+  refreshIntervalMinutes: alertService.staleAfterMs / 60000,
+});
+
+// POST /api/alerts/generate: force a run
 export const generateAlerts = async (req, res) => {
   try {
-    const medicines = await Medicine.find();
-
-    // Clear old alerts
-    await Alert.deleteMany({ createdAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } });
-
-    const alerts = [];
-
-    for (const medicine of medicines) {
-      // Low stock alert
-      if (medicine.quantity <= medicine.reorderLevel / 2) {
-        const existingAlert = await Alert.findOne({
-          medicineId: medicine._id,
-          alertType: 'low_stock',
-          isResolved: false,
-        });
-
-        if (!existingAlert) {
-          const alert = await Alert.create({
-            medicineId: medicine._id,
-            medicineName: medicine.name,
-            alertType: 'low_stock',
-            message: `Stock going to less – Add stock immediately. Current: ${medicine.quantity}, Reorder Level: ${medicine.reorderLevel}`,
-            severity: 'critical',
-          });
-          alerts.push(alert);
-        }
-      }
-
-      // Expiry is tracked per batch, so check every batch still in stock
-      const { nearExpiry, expired } = getExpiringBatches(medicine.batches, 7);
-
-      // Near expiry alert
-      if (nearExpiry.length > 0) {
-        const existingAlert = await Alert.findOne({
-          medicineId: medicine._id,
-          alertType: 'near_expiry',
-          isResolved: false,
-        });
-
-        if (!existingAlert) {
-          const alert = await Alert.create({
-            medicineId: medicine._id,
-            medicineName: medicine.name,
-            alertType: 'near_expiry',
-            message: `Batches expiring within 7 days: ${describeBatches(nearExpiry)}`,
-            severity: 'warning',
-          });
-          alerts.push(alert);
-        }
-      }
-
-      // Expired alert
-      if (expired.length > 0) {
-        const existingAlert = await Alert.findOne({
-          medicineId: medicine._id,
-          alertType: 'expired',
-          isResolved: false,
-        });
-
-        if (!existingAlert) {
-          const alert = await Alert.create({
-            medicineId: medicine._id,
-            medicineName: medicine.name,
-            alertType: 'expired',
-            message: `Expired batches still in stock: ${describeBatches(expired)}`,
-            severity: 'critical',
-          });
-          alerts.push(alert);
-        }
-      }
-
-      // Overstock alert
-      if (medicine.quantity > medicine.reorderLevel * 3) {
-        const existingAlert = await Alert.findOne({
-          medicineId: medicine._id,
-          alertType: 'overstock',
-          isResolved: false,
-        });
-
-        if (!existingAlert) {
-          const alert = await Alert.create({
-            medicineId: medicine._id,
-            medicineName: medicine.name,
-            alertType: 'overstock',
-            message: `Overstock detected. Quantity: ${medicine.quantity}`,
-            severity: 'info',
-          });
-          alerts.push(alert);
-        }
-      }
-    }
-
-    log('INFO', 'Alerts generated', { alertCount: alerts.length });
+    const { created, updated, autoResolved, pruned } = await alertService.generate();
 
     res.status(200).json({
       success: true,
-      message: `${alerts.length} new alerts generated`,
-      alerts,
+      message: `${created.length} new alerts generated`,
+      created: created.length,
+      updated,
+      autoResolved,
+      pruned,
+      alerts: created,
+      ...freshness(),
     });
   } catch (error) {
     log('ERROR', 'Generate alerts error', { error: error.message });
@@ -116,24 +42,28 @@ export const generateAlerts = async (req, res) => {
   }
 };
 
-// Get all alerts
+// GET /api/alerts?resolved=true|false&type=&severity=
 export const getAllAlerts = async (req, res) => {
   try {
-    const { resolved } = req.query;
+    await alertService.refreshIfStale();
+
+    const { resolved, type, severity } = req.query;
 
     const filter = {};
     if (resolved !== undefined) {
       filter.isResolved = resolved === 'true';
     }
+    if (ALERT_TYPES.includes(type)) filter.alertType = type;
+    if (SEVERITIES.includes(severity)) filter.severity = severity;
 
-    const alerts = await Alert.find(filter)
-      .populate('medicineId', 'name category quantity')
-      .sort({ severity: -1, createdAt: -1 });
+    const alerts = await Alert.find(filter).populate('medicineId', MEDICINE_FIELDS).lean();
+    alerts.sort(compareAlerts);
 
     res.status(200).json({
       success: true,
       count: alerts.length,
       alerts,
+      ...freshness(),
     });
   } catch (error) {
     log('ERROR', 'Get all alerts error', { error: error.message });
@@ -145,20 +75,24 @@ export const getAllAlerts = async (req, res) => {
   }
 };
 
-// Get critical alerts
+// GET /api/alerts/critical: unresolved critical alerts (drives the sidebar badge)
 export const getCriticalAlerts = async (req, res) => {
   try {
+    await alertService.refreshIfStale();
+
     const alerts = await Alert.find({
       severity: 'critical',
       isResolved: false,
     })
-      .populate('medicineId', 'name category quantity')
-      .sort({ createdAt: -1 });
+      .populate('medicineId', MEDICINE_FIELDS)
+      .lean();
+    alerts.sort(compareAlerts);
 
     res.status(200).json({
       success: true,
       count: alerts.length,
       alerts,
+      ...freshness(),
     });
   } catch (error) {
     log('ERROR', 'Get critical alerts error', { error: error.message });
@@ -170,25 +104,59 @@ export const getCriticalAlerts = async (req, res) => {
   }
 };
 
-// Resolve alert
+// PUT /api/alerts/:id/resolve: a user acknowledges the alert.
+// It stays the current alert for its medicine and type, so later runs don't raise it again
+// until the situation changes (see alertService.acknowledgementCovers).
 export const resolveAlert = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(404).json({ success: false, message: 'Alert not found' });
+    }
 
-    const alert = await Alert.findByIdAndUpdate(
-      id,
-      { isResolved: true },
+    const alert = await Alert.findOneAndUpdate(
+      { _id: id, isResolved: false },
+      {
+        $set: {
+          isResolved: true,
+          resolvedAt: new Date(),
+          resolvedBy: mongoose.isValidObjectId(req.user?.id) ? req.user.id : null,
+          resolvedByName: req.user?.username || null,
+          autoResolved: false,
+        },
+      },
       { returnDocument: 'after' }
     );
 
     if (!alert) {
-      return res.status(404).json({
+      const exists = await Alert.exists({ _id: id });
+      return res.status(exists ? 409 : 404).json({
         success: false,
-        message: 'Alert not found',
+        message: exists ? 'Alert is already resolved' : 'Alert not found',
       });
     }
 
-    log('INFO', 'Alert resolved', { alertId: id });
+    // The audit middleware skips this route; the entry is written here with the alert's details
+    await createAuditEntry({
+      userId: alert.resolvedBy,
+      username: alert.resolvedByName || 'unknown',
+      action: 'ALERT_RESOLVED',
+      module: 'Alerts',
+      details: {
+        alertId: alert._id,
+        medicineId: alert.medicineId,
+        medicineName: alert.medicineName,
+        alertType: alert.alertType,
+        severity: alert.severity,
+        message: alert.message,
+      },
+      ipAddress: req.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown',
+      httpMethod: 'PUT',
+      endpoint: req.originalUrl || `/api/alerts/${id}/resolve`,
+      statusCode: 200,
+    });
+
+    log('INFO', 'Alert resolved', { alertId: id, by: alert.resolvedByName });
 
     res.status(200).json({
       success: true,

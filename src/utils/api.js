@@ -72,12 +72,17 @@ export const customerAPI = {
 
 // ============ ALERT APIs ============
 export const alertAPI = {
-  getAllAlerts: (resolved) => apiClient.get('/alerts', { params: { resolved } }),
+  // params: { resolved?: boolean, type?, severity? }
+  getAllAlerts: (params = {}) => apiClient.get('/alerts', { params }),
   getCriticalAlerts: () => apiClient.get('/alerts/critical'),
   generateAlerts: () => apiClient.post('/alerts/generate'),
   resolveAlert: (id) => apiClient.put(`/alerts/${id}/resolve`),
   getMedicineRecommendations: () => apiClient.get('/alerts/recommendations'),
 };
+
+// Fired after alerts are resolved or regenerated, so the sidebar badge refreshes at once
+export const ALERTS_CHANGED_EVENT = 'medistock:alerts-changed';
+export const notifyAlertsChanged = () => window.dispatchEvent(new Event(ALERTS_CHANGED_EVENT));
 
 // ============ UPLOAD APIs ============
 export const uploadAPI = {

@@ -118,7 +118,7 @@ Traces each feature from the screen to the data.
 | Billing | `Billing.jsx` | `/api/billing` | `billingController` | Bill, Medicine, InventoryHistory, Customer |
 | Customers | `Customers.jsx` | `/api/customers/*` | `customerController` | Customer |
 | Excel import/export | `ExcelUpload.jsx` | `/api/uploads/*` | `uploadController` | Medicine, AuditLog |
-| Alerts | (Dashboard / Inventory) | `/api/alerts/*` | `alertController` | Alert, Medicine |
+| Alerts | `Alerts.jsx`, sidebar badge, Dashboard | `/api/alerts/*` | `alertController` → `services/alertService` | Alert, Medicine, AuditLog |
 | Stock intelligence | `StockIntelligence.jsx` | `/api/inventory/intelligence` | `inventoryController` | Medicine, InventoryHistory |
 | Forecast settings + run | `ai/DemandSetup.jsx` | `/api/forecast/parameters`, `/api/forecast/run` | `forecastController` + `ml/` | ForecastParameters, PurchaseOrder, Supplier |
 | Forecast review | `ai/ForecastReview.jsx` | `/api/forecast/recommendations`, `/trend` | `forecastController` | PurchaseOrder |
@@ -157,7 +157,7 @@ Traces each feature from the screen to the data.
 - **Single-instance assumptions.** Chatbot history is an in-memory `Map`, and the logger writes to local disk. Running two API instances would give users inconsistent chat context and split logs.
 - **Heavy work on the request path.** `POST /api/forecast/run` trains one LSTM per medicine synchronously, blocking that request (and competing for CPU with others) for the whole run.
 - **Transactions only on replica sets.** Billing uses a multi-document transaction when MongoDB supports one; on a standalone server it falls back to a compensating rollback; see [core-flows.md](core-flows.md#known-limitations).
-- **No scheduler.** Alerts and forecasts are generated only when a user triggers them.
+- **No scheduler.** Forecasts run only when a user triggers them. Alerts are regenerated when they are read (at most every 15 minutes, or after a stock change), so nothing is pushed while nobody has the app open; the last-run time is per process.
 
 ## Future improvements
 
