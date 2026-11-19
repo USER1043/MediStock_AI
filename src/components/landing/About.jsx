@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
+  Store,
   ShieldCheck,
   Database,
   Bot,
@@ -24,6 +25,21 @@ const CLINIC_NAME = "Padmanaba Medicals";
 const CLINIC_LINK = "https://share.google/2v5bEfTay9SK1lG3i";
 const CLINIC_IMAGE = "https://lh3.googleusercontent.com/proxy/jNdNuojdxLD7TqK-MxFQTDS2w8QNYmLQ1AlYkLK1u3QTLTuyC6QR18ejR6bibkMCx4Ppf9lg1pxuUHZ1tgVoo3I49q41QMEZRCAWsajlRx8FbZMQqS5eVDnmhg5CuZGX-celRt83CiAMZCLPYVcrDJktxbt8cGMBdMydAg=s1360-w1360-h1020";
 const FACULTY_TITLE = "Professor, Dept. of Computer Science and Engineering";
+
+// Shows the photo, or the fallback icon in a same-sized tile if the photo is missing or fails to load
+const PhotoOrIcon = ({ src, alt, fallback, className = "", fallbackClassName = "bg-white" }) => {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <div role="img" aria-label={alt} className={`w-16 h-16 rounded-xl shadow-sm flex items-center justify-center ${fallbackClassName}`}>
+        {fallback}
+      </div>
+    );
+  }
+  return (
+    <img src={src} alt={alt} onError={() => setFailed(true)} className={`w-16 h-16 rounded-xl object-cover shadow-sm ${className}`} />
+  );
+};
 
 const About = () => {
   const team = [
@@ -97,7 +113,7 @@ const About = () => {
           {/* Collaborator Card */}
           <div className="bg-white rounded-xl p-8 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border border-slate-200 flex flex-col sm:flex-row items-start space-y-4 sm:space-y-0 sm:space-x-6 group">
             <div className="p-4 bg-slate-50 rounded-2xl group-hover:bg-slate-100 transition-colors shrink-0">
-              <img src={CLINIC_IMAGE} alt={CLINIC_NAME} className="w-16 h-16 rounded-xl object-cover shadow-sm" />
+              <PhotoOrIcon src={CLINIC_IMAGE} alt={CLINIC_NAME} fallback={<Store className="w-8 h-8 text-slate-500" />} />
             </div>
             <div>
               <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">The Clinical Collaborator</p>
@@ -115,7 +131,7 @@ const About = () => {
           <div className="bg-white rounded-xl p-8 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border border-emerald-100 flex flex-col sm:flex-row items-start space-y-4 sm:space-y-0 sm:space-x-6 group relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full blur-3xl -mr-10 -mt-10 transition-transform group-hover:scale-150"></div>
             <div className="p-1 bg-emerald-50 rounded-2xl group-hover:bg-emerald-100 transition-colors shrink-0 relative z-10 w-18 h-18">
-              <img src={FACULTY_IMAGE} alt={FACULTY_NAME} className="w-16 h-16 rounded-xl object-cover shadow-sm" />
+              <PhotoOrIcon src={FACULTY_IMAGE} alt={FACULTY_NAME} fallback={<GraduationCap className="w-8 h-8 text-emerald-600" />} />
             </div>
             <div className="relative z-10">
               <p className="text-sm font-bold text-emerald-600 uppercase tracking-wider mb-2">Project Mentorship</p>
@@ -143,15 +159,9 @@ const About = () => {
               <div key={idx} className={`bg-white rounded-xl p-8 shadow-sm hover:shadow-xl hover:-translate-y-2 transition-all duration-300 border border-slate-200 flex flex-col h-full group ${member.hoverBorder}`}>
                 <div className="flex items-center space-x-5 mb-6">
                   <div className={`transition-transform group-hover:scale-110 duration-300 shrink-0`}>
-                    {member.image ? (
-                      <div className={`p-1 rounded-2xl ${member.accentBg}`}>
-                        <img src={member.image} alt={member.name} className="w-16 h-16 rounded-xl object-cover shadow-sm bg-white" />
-                      </div>
-                    ) : (
-                      <div className={`p-4 rounded-2xl ${member.accentBg}`}>
-                        {member.icon}
-                      </div>
-                    )}
+                    <div className={`p-1 rounded-2xl ${member.accentBg}`}>
+                      <PhotoOrIcon src={member.image} alt={member.name} fallback={member.icon} className="bg-white" />
+                    </div>
                   </div>
                   <div>
                     <a href={member.link} target="_blank" rel="noopener noreferrer" className="group/link inline-flex items-center text-xl font-bold text-slate-900 hover:text-blue-600 transition-colors group-hover:text-slate-700">
