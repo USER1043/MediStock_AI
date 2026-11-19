@@ -369,22 +369,13 @@ const MedicineInventory = () => {
         },
     ];
 
-    const rows = medicines.map((m) => {
-        return {
-            id: m._id,
-            medicineId: m.medicineId,
-            name: m.name,
-            category: m.category,
-            purchasePrice: m.purchasePrice,
-            unitPrice: m.unitPrice,
-            stockQuantity: m.stockQuantity,
-            rackNumber: m.rackNumber,
-            expiryDate: m.expiryDate,
-            supplierName: m.supplierId,
-            supplierId: m.supplierId,
-            _id: m._id
-        };
-    });
+    // Keep every field from convertRecordToRow (version, batchId, batchQuantity, batchCount): the update
+    // handler reads them from the clicked grid row
+    const rows = medicines.map((m) => ({
+        ...m,
+        id: m._id,
+        supplierName: m.supplierId,
+    }));
 
     // ── render ─────────────────────────────────────────────
     return (
