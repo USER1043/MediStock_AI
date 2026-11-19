@@ -3,8 +3,9 @@
  * @module pages/Alerts
  *
  * Alerts are generated on the server when they are read (at most every 15 minutes, or right
- * after a stock change). "Refresh" forces a run. Resolving an alert acknowledges it: it won't
- * come back until the situation changes (e.g. another batch starts expiring).
+ * after a stock change). "Refresh" forces a run. Expiry alerts are per batch. Resolving an alert
+ * acknowledges it: it won't come back until the situation changes (e.g. that batch expires, or
+ * sells out and is restocked while still expiring).
  */
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { alertAPI, notifyAlertsChanged } from '../utils/api';
@@ -34,10 +35,26 @@ const SEVERITY_META = {
   info: { label: 'Info', border: 'border-blue-400', badge: 'bg-blue-100 text-blue-700', icon: 'bg-blue-50 text-blue-600' },
 };
 
-const BATCH_HEADINGS = {
-  near_expiry: 'Batches expiring within 7 days',
-  expired: 'Expired batches still in stock',
+// Same day count as the server: ceil((expiry - now) / 1 day); 0 or less means expired
+const daysLeft = (iso) => Math.ceil((new Date(iso).getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+
+const batchStatus = (alertType, expiryDate) => {
+  const days = daysLeft(expiryDate);
+  if (alertType === 'expired') {
+    const ago = -days;
+    return ago <= 0 ? 'Expired today, still in stock' : `Expired ${ago} day${ago === 1 ? '' : 's'} ago, still in stock`;
+  }
+  return days <= 1 ? 'Expires within a day' : `Expires in ${days} days`;
 };
+
+function BatchField({ label, value, mono }) {
+  return (
+    <div>
+      <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">{label}</p>
+      <p className={`text-sm font-semibold text-gray-800 ${mono ? 'font-mono' : ''}`}>{value}</p>
+    </div>
+  );
+}
 
 const fmtDateTime = (iso) =>
   new Date(iso).toLocaleString('en-IN', {
@@ -103,6 +120,11 @@ function AlertCard({ alert, onResolve, resolving }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-bold text-gray-900">{medicineName}</h3>
+            {alert.batch && (
+              <span className="px-2 py-0.5 rounded-full text-xs font-mono font-semibold bg-gray-800 text-white">
+                {alert.batch.batchNumber}
+              </span>
+            )}
             <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">{type.label}</span>
             <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${sev.badge}`}>{sev.label}</span>
             {alert.isResolved && (
@@ -110,30 +132,19 @@ function AlertCard({ alert, onResolve, resolving }) {
             )}
           </div>
 
-          {alert.batches?.length > 0 ? (
+          {alert.batch ? (
             <div className="mt-3">
-              <p className="text-sm text-gray-700 mb-2">{BATCH_HEADINGS[alert.alertType] || 'Affected batches'}:</p>
-              <div className="overflow-x-auto">
-                <table className="text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-gray-500 uppercase tracking-wide">
-                      <th className="pr-6 py-1 font-semibold">Batch</th>
-                      <th className="pr-6 py-1 font-semibold">Expiry</th>
-                      <th className="pr-6 py-1 font-semibold">Rack</th>
-                      <th className="py-1 font-semibold text-right">Qty</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {alert.batches.map((b) => (
-                      <tr key={`${b.batchNumber}-${b.expiryDate}`} className="border-t border-gray-100">
-                        <td className="pr-6 py-1 font-mono text-gray-800">{b.batchNumber}</td>
-                        <td className="pr-6 py-1 text-gray-700">{fmtDate(b.expiryDate)}</td>
-                        <td className="pr-6 py-1 text-gray-700">{b.rackNumber}</td>
-                        <td className="py-1 text-right font-semibold text-gray-800">{b.quantity}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              {/* Closed alerts keep the batch as it was last seen; a relative "expires in" would mislead */}
+              {alert.isCurrent !== false && (
+                <p className={`text-sm font-medium ${alert.alertType === 'expired' ? 'text-red-700' : 'text-yellow-700'}`}>
+                  {batchStatus(alert.alertType, alert.batch.expiryDate)}
+                </p>
+              )}
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-3 bg-gray-50 rounded-lg px-4 py-3 max-w-xl">
+                <BatchField label="Batch" value={alert.batch.batchNumber} mono />
+                <BatchField label="Expiry" value={fmtDate(alert.batch.expiryDate)} />
+                <BatchField label="Rack" value={alert.batch.rackNumber} />
+                <BatchField label="Qty" value={alert.batch.quantity} />
               </div>
             </div>
           ) : (
