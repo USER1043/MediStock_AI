@@ -102,19 +102,19 @@ sequenceDiagram
 
     O->>DS: "Run forecast"
     DS->>API: POST /api/forecast/run
-    API->>DB: PurchaseOrder.deleteMany({order_status: 'AI_Draft'})
     loop each medicine
         API->>ML: computeForecast(medicine, params)
         ML->>DB: completed Bills + 'sale' InventoryHistory for this medicine
         ML->>ML: daily series (last 90 days) → LSTM predict horizon×7 days
         ML->>ML: × seasonal multiplier → reorder qty, priority
         ML-->>API: {predictedDemand, optimalReorderQty, priority}
-        opt reorderQty > 0 or priority == high
+        opt reorderQty > 0
             API->>DB: find active Supplier for category (fallback: any supplier)
-            API->>API: build AI_Draft PO
+            API->>API: build AI_Draft PO (priority high → High, etc.)
         end
     end
-    API->>DB: PurchaseOrder.insertMany(drafts)
+    API->>API: validate every new draft
+    API->>DB: replace all AI_Draft POs with the new ones<br/>(transaction on a replica set; standalone: insert new, then delete old)
     API->>DB: AuditLog FORECAST_RUN
     API-->>DS: {count}
 
@@ -297,7 +297,6 @@ Runs no longer delete alerts after 24 hours. They delete only **closed** alerts 
 - **Billing atomicity depends on the MongoDB topology.** On a replica set (e.g. Atlas) a bill runs in a transaction. On a standalone server (e.g. the local Docker setup) it falls back to a compensating rollback, which restores each medicine's saved `batches` wholesale and could overwrite a change made by another request in between.
 - **The `__v` concurrency check only catches writers that bump `__v`.** All stock writers in the controllers do (`createBill`, `adjustQuantity`, `updateMedicine`, `createMedicine`, Excel import, PO receive); seed scripts and direct database edits don't.
 - **Transaction write conflicts return 500.** When two bills collide inside transactions, MongoDB's `WriteConflict` error surfaces as a 500 rather than the 409 "please retry" response.
-- **Rule-based reorder can fail on zero stock.** `generateReorderSuggestions` sets priority `'Critical'`, which isn't in the PO `priority` enum (`Low | Medium | High`), so `PurchaseOrder.create` throws a validation error for out-of-stock medicines.
 - **Received batches get a fake expiry** (now + 1 year) and rack `'Receiving Area'` until someone edits them.
 
 ## Future improvements

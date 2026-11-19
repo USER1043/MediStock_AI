@@ -137,10 +137,10 @@ export const generateReorderSuggestions = async (req, res) => {
 
       if (!supplier) continue; // Skip if no supplier found
 
-      // Determine priority
+      // Determine priority. Out of stock is the most urgent case, but the PO priority enum is
+      // Low | Medium | High (shared with forecast drafts and the Forecast Review filter), so it maps to High.
       let priority = 'Low';
-      if (medicine.quantity === 0) priority = 'Critical';
-      else if (medicine.quantity < medicine.reorderLevel * 0.5) priority = 'High';
+      if (medicine.quantity === 0 || medicine.quantity < medicine.reorderLevel * 0.5) priority = 'High';
       else if (medicine.quantity < medicine.reorderLevel) priority = 'Medium';
 
       const orderNumber = `PO-AI-${Date.now()}-${Math.floor(Math.random() * 1000)}`;

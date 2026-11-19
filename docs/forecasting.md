@@ -36,7 +36,7 @@ flowchart TB
     cold --> season
     sum --> season["× seasonal multiplier for the current month"]
     season --> reorder["3 · Reorder quantity + priority"]
-    reorder --> po["AI_Draft PurchaseOrder<br/>if qty > 0 or priority = high"]
+    reorder --> po["AI_Draft PurchaseOrder<br/>if qty > 0"]
 ```
 
 ---
@@ -85,6 +85,8 @@ The cold-start path uses the same shape with `daily = reorderLevel / 30` and `ad
 | Otherwise | medium |
 
 **Supplier selection:** the first active supplier whose `medicine_categories` includes the medicine's category, or else any supplier.
+
+**Saving the drafts:** the classifier's lowercase priority is mapped to the PO enum (`high` → `High`, and so on). Every new draft is validated first, then the run replaces all existing `AI_Draft` POs: in one transaction on a replica set, or on a standalone server by inserting the new drafts and then deleting the old ones. If anything fails, the old drafts stay and the run returns 500. A run that finds nothing to order (a medicine needs a reorder quantity of at least 1) still clears the old drafts.
 
 ---
 

@@ -2,6 +2,7 @@
  * @file Controller for managing AI demand forecasting, recommendations, and parameters.
  * @module controllers/forecastController
  */
+import mongoose from 'mongoose';
 import { Medicine } from '../models/medicineModel.js';
 import { AuditLog } from '../models/auditLogModel.js';
 import { InventoryHistory } from '../models/inventoryHistoryModel.js';
@@ -17,6 +18,52 @@ const DEFAULT_PARAMS = {
     seasonalMultipliers: { jan: 1.0, feb: 1.0, mar: 1.1, apr: 1.2, may: 1.2, jun: 1.1, jul: 1.3, aug: 1.3, sep: 1.2, oct: 1.4, nov: 1.4, dec: 1.2 }
 };
 
+// The classifier in ml/demandForecast.js returns lowercase priorities ('high' | 'medium' | 'low');
+// the PO schema's ai_forecast_reference.priority enum is 'High' | 'Medium' | 'Low'.
+// Unknown values pass through unchanged so schema validation still rejects them.
+const PO_PRIORITY = { high: 'High', medium: 'Medium', low: 'Low' };
+export const toPoPriority = (priority) => PO_PRIORITY[priority] ?? priority;
+
+// Same check as billingController.createBill: transactions need a replica set, sharded cluster or load balancer.
+const supportsTransactions = () => {
+    const type = mongoose.connection?.client?.topology?.description?.type;
+    return type === 'ReplicaSetWithPrimary' || type === 'Sharded' || type === 'LoadBalanced';
+};
+
+// Replaces every AI_Draft PO with `drafts` (already validated documents) without ever leaving the old drafts
+// deleted when the new ones can't be written. With a replica set the delete and insert share a transaction.
+// On a standalone server the new drafts are inserted first and only then are the old ones (every AI_Draft not
+// in this run) deleted; if the insert fails, any new drafts that did get written are removed again.
+// An empty `drafts` list still clears the old drafts: a run that finds nothing to order replaces them with nothing.
+export const replaceAiDrafts = async (drafts) => {
+    if (supportsTransactions()) {
+        const session = await mongoose.startSession();
+        try {
+            session.startTransaction();
+            await PurchaseOrder.deleteMany({ order_status: 'AI_Draft' }, { session });
+            const created = await PurchaseOrder.insertMany(drafts, { session });
+            await session.commitTransaction();
+            return created;
+        } catch (error) {
+            await session.abortTransaction().catch(() => {});
+            throw error;
+        } finally {
+            await session.endSession().catch(() => {});
+        }
+    }
+
+    const newIds = drafts.map((d) => d._id);
+    let created;
+    try {
+        created = await PurchaseOrder.insertMany(drafts);
+    } catch (error) {
+        await PurchaseOrder.deleteMany({ _id: { $in: newIds } }).catch(() => {});
+        throw error;
+    }
+    await PurchaseOrder.deleteMany({ order_status: 'AI_Draft', _id: { $nin: newIds } });
+    return created;
+};
+
 // Generates AI demand forecasts and draft purchase orders for medicines, and writes the audit entry
 // (`action`) itself: the audit middleware skips the run and retrain routes.
 const draftForecastOrders = async (req, res, action) => {
@@ -29,21 +76,24 @@ const draftForecastOrders = async (req, res, action) => {
             dbParams = dbParams.toObject();
         }
 
-        await PurchaseOrder.deleteMany({ order_status: 'AI_Draft' });
-
+        // One timestamp per run plus an index keeps order numbers unique within the run
+        // (Date.now() plus a random 0-999 could repeat when several drafts are built in the same millisecond).
+        const runStamp = Date.now();
         const drafts = [];
         for (const med of medicines) {
             const forecast = await computeForecast(med, dbParams);
 
-            if (forecast.optimalReorderQty > 0 || forecast.priority === 'high') {
+            // A PO needs requested_quantity >= 1, so a high-priority medicine whose computed reorder
+            // quantity is 0 (already stocked enough) gets no draft.
+            if (forecast.optimalReorderQty > 0) {
                 // Determine supplier
                 let supplier = await Supplier.findOne({ medicine_categories: med.category, is_active: true });
                 if (!supplier) supplier = await Supplier.findOne(); // fallback
 
                 if (!supplier) continue;
 
-                drafts.push({
-                    order_number: `PO-AI-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                drafts.push(new PurchaseOrder({
+                    order_number: `PO-AI-${runStamp}-${drafts.length + 1}`,
                     medicine_id: med._id,
                     medicine_name: med.name,
                     supplier_id: supplier._id,
@@ -56,13 +106,15 @@ const draftForecastOrders = async (req, res, action) => {
                     ai_forecast_reference: {
                         demand_predicted: forecast.predictedDemand,
                         forecast_date: new Date(),
-                        priority: forecast.priority
+                        priority: toPoPriority(forecast.priority)
                     }
-                });
+                }));
             }
         }
 
-        const created = await PurchaseOrder.insertMany(drafts);
+        // Validate every new draft before touching the existing ones
+        await Promise.all(drafts.map((d) => d.validate()));
+        const created = await replaceAiDrafts(drafts);
 
         await AuditLog.create({
             userId: req.user.id,
