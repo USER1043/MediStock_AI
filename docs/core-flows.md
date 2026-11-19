@@ -188,28 +188,34 @@ sequenceDiagram
     M->>M: MIME check (Excel only), size ≤ MAX_UPLOAD_SIZE (5 MB)
     M->>API: req.file saved to server/uploads/
     API->>API: XLSX read first sheet → rows, then detectAnomalies(rows)
+    API->>DB: load all suppliers once (id + supplier_name)
     loop each row
+        API->>API: match supplier cell to a supplier (name or _id); unknown → row fails
         alt medicine name exists
             alt batch with same batchNumber and expiry day exists
                 API->>DB: add quantity to that batch (rack updated if given)
             else new batch number or different expiry
                 API->>DB: push batch
             end
-            API->>DB: medicine.quantity += row.quantity
+            API->>DB: medicine.quantity += row.quantity (supplier updated if the cell is not blank)
         else new medicine
             API->>DB: Medicine.create with first batch
         end
-        Note right of API: a failing row counts as recordsFailed, others continue
+        Note right of API: a failing row counts as recordsFailed and adds a row error, others continue
     end
     API->>DB: AuditLog EXCEL_UPLOAD {totals, anomalies}
     API->>API: delete temp file
-    API-->>UI: {recordsProcessed, recordsSuccessful, recordsFailed, anomalies}
+    API-->>UI: {recordsProcessed, recordsSuccessful, recordsFailed, anomalies, errors}
     opt user is owner
         UI-)API: POST /api/forecast/retrain (fire-and-forget, re-runs forecasting)
     end
 ```
 
-Expected columns: `name, category, batchNumber, expiryDate, quantity, rackNumber, purchasePrice, sellingPrice, reorderLevel`.
+Expected columns: `name, category, batchNumber, expiryDate, quantity, rackNumber, purchasePrice, sellingPrice, reorderLevel, supplier`.
+
+**Supplier column.** `Medicine.supplier` stores a `Supplier._id`, so the import matches the cell to a supplier by `supplier_name` (trimmed, case-insensitive, exact; no wildcards) or by a valid `_id`, and stores the `_id`. The suppliers are loaded once per import. An unknown supplier fails just that row with `Row N: supplier 'X' not found — add it on the Suppliers page first` (N counts data rows from 1, like `anomalies`), before any stock is changed; a name that matches several suppliers differing only by case is also rejected. A blank cell leaves a new medicine without a supplier and keeps an existing medicine's current one; a non-blank cell updates an existing medicine's supplier. The row errors come back in `errors` (`[{ row, message }]`) and the first 100 are kept in the `EXCEL_UPLOAD` audit entry.
+
+The export writes the supplier **name** (ids resolved in one query), so an export can be imported again. A legacy value that isn't a valid id is written as it is, and a medicine with no supplier gets an empty cell.
 
 `detectAnomalies` flags negative quantities, quantities over 100,000, past expiry dates, and selling prices below purchase prices. Anomalies are **reported, not blocked**: the row is still imported.
 
