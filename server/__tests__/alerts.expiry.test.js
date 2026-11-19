@@ -67,35 +67,51 @@ describe('getExpiringBatches', () => {
 
 // Which conditions hold for a medicine. Creating, updating and acknowledging the Alert documents
 // is covered against a real database in alerts.integration.test.js and alerts.lifecycle.test.js.
-describe('evaluateMedicine expiry conditions', () => {
-  it('raises near_expiry naming only the batch that expires soon', () => {
+describe('evaluateMedicine expiry conditions (one per batch)', () => {
+  it('raises near_expiry for the batch that expires soon, identified by its _id', () => {
     const med = medicine({
       batches: [
-        { batchNumber: 'SOON-1', expiryDate: daysFromNow(4), quantity: 20, rackNumber: 'R1' },
-        { batchNumber: 'LATER-1', expiryDate: daysFromNow(200), quantity: 80, rackNumber: 'R2' },
+        { _id: 'b-soon', batchNumber: 'SOON-1', expiryDate: new Date('2026-11-23T00:00:00Z'), quantity: 20, rackNumber: 'E3' },
+        { _id: 'b-later', batchNumber: 'LATER-1', expiryDate: new Date('2027-06-01T00:00:00Z'), quantity: 80, rackNumber: 'R2' },
       ],
     });
 
-    const nearExpiry = conditionsOf(med, 'near_expiry');
+    const nearExpiry = evaluateMedicine(med, new Date('2026-11-19T10:00:00Z')).filter((c) => c.alertType === 'near_expiry');
     expect(nearExpiry).toHaveLength(1);
-    expect(nearExpiry[0].severity).toBe('warning');
-    expect(nearExpiry[0].message).toContain('SOON-1');
-    expect(nearExpiry[0].message).not.toContain('LATER-1');
-    expect(nearExpiry[0].batches).toEqual([
-      expect.objectContaining({ batchNumber: 'SOON-1', rackNumber: 'R1', quantity: 20 }),
-    ]);
-    expect(conditionsOf(med, 'expired')).toEqual([]);
+    expect(nearExpiry[0]).toMatchObject({
+      severity: 'warning',
+      batchId: 'b-soon',
+      batch: { batchNumber: 'SOON-1', rackNumber: 'E3', quantity: 20 },
+      fingerprint: ['2026-11-23'],
+      message: 'Batch SOON-1 expires on 23 Nov 2026 (rack E3, qty 20)',
+    });
   });
 
-  it('raises a critical expired condition for expired batches still in stock', () => {
+  it('raises a critical expired condition per expired batch still in stock', () => {
     const med = medicine({
-      batches: [{ batchNumber: 'OLD-1', expiryDate: daysFromNow(-10), quantity: 15, rackNumber: 'R4' }],
+      batches: [
+        { _id: 'b-old', batchNumber: 'PAR-001', expiryDate: new Date('2026-11-04T00:00:00Z'), quantity: 200, rackNumber: 'A2' },
+        { _id: 'b-older', batchNumber: 'PAR-000', expiryDate: new Date('2026-10-01T00:00:00Z'), quantity: 3, rackNumber: 'A1' },
+      ],
     });
 
-    const expired = conditionsOf(med, 'expired');
-    expect(expired).toHaveLength(1);
-    expect(expired[0].severity).toBe('critical');
-    expect(expired[0].message).toContain('OLD-1');
+    const expired = evaluateMedicine(med, new Date('2026-11-19T10:00:00Z')).filter((c) => c.alertType === 'expired');
+    expect(expired.map((c) => c.batchId).sort()).toEqual(['b-old', 'b-older']);
+    expect(expired.every((c) => c.severity === 'critical')).toBe(true);
+    expect(expired.find((c) => c.batchId === 'b-old').message).toBe(
+      'Batch PAR-001 expired on 04 Nov 2026 and is still in stock (rack A2, qty 200)'
+    );
+  });
+
+  it('gives two expiring batches two conditions', () => {
+    const med = medicine({
+      batches: [
+        { _id: 'b1', batchNumber: 'B1', expiryDate: daysFromNow(2), quantity: 5, rackNumber: 'R1' },
+        { _id: 'b2', batchNumber: 'B2', expiryDate: daysFromNow(5), quantity: 6, rackNumber: 'R2' },
+      ],
+    });
+
+    expect(conditionsOf(med, 'near_expiry').map((c) => c.batchId)).toEqual(['b1', 'b2']);
   });
 
   it('ignores expired batches that have been fully used up', () => {
@@ -110,21 +126,21 @@ describe('evaluateMedicine expiry conditions', () => {
     expect(conditionsOf(med, 'near_expiry')).toEqual([]);
   });
 
-  it('fingerprints expiry conditions by batch number and expiry day, not quantity', () => {
-    const at = (qty) =>
-      conditionsOf(
-        medicine({
-          batches: [
-            { batchNumber: 'B2', expiryDate: daysFromNow(3), quantity: qty, rackNumber: 'R1' },
-            { batchNumber: 'B1', expiryDate: daysFromNow(5), quantity: 4, rackNumber: 'R1' },
-          ],
-        }),
-        'near_expiry'
-      )[0].fingerprint;
+  it('fingerprints a batch condition by its expiry day, not its quantity or rack', () => {
+    const at = (quantity, rackNumber) =>
+      evaluateMedicine(
+        medicine({ batches: [{ _id: 'b1', batchNumber: 'B1', expiryDate: new Date('2026-11-23T00:00:00Z'), quantity, rackNumber }] }),
+        new Date('2026-11-19T10:00:00Z')
+      )[0];
 
-    expect(at(10)).toEqual(at(3));
-    expect(at(10)).toHaveLength(2);
-    expect(at(10)[0]).toMatch(/^B1@\d{4}-\d{2}-\d{2}$/);
+    expect(at(10, 'R1').fingerprint).toEqual(['2026-11-23']);
+    expect(at(10, 'R1').fingerprint).toEqual(at(3, 'R9').fingerprint);
+    expect(at(10, 'R1').message).not.toBe(at(3, 'R9').message);
+  });
+
+  it('stock alerts carry no batch', () => {
+    const [low] = conditionsOf(medicine({ quantity: 0, reorderLevel: 50 }), 'low_stock');
+    expect(low).toMatchObject({ batchId: null, batch: null });
   });
 });
 
@@ -143,10 +159,10 @@ describe('evaluateMedicine stock conditions', () => {
 
 describe('acknowledgementCovers', () => {
   it.each([
-    ['near_expiry', ['A@2026-11-20'], ['A@2026-11-20'], true],
-    ['near_expiry', ['A@2026-11-20', 'B@2026-11-22'], ['A@2026-11-20'], true], // a batch sold out: nothing new
-    ['near_expiry', ['A@2026-11-20'], ['A@2026-11-20', 'B@2026-11-22'], false], // a second batch started expiring
-    ['expired', ['A@2026-11-20'], ['B@2026-11-20'], false],
+    // a batch alert stays acknowledged while its condition holds; clearing closes it instead
+    ['near_expiry', ['2026-11-20'], ['2026-11-20'], true],
+    ['near_expiry', ['2026-11-20'], ['2026-11-22'], true], // expiry edited, still near expiry
+    ['expired', ['2026-11-04'], ['2026-11-04'], true],
     ['low_stock', ['low'], ['low'], true],
     ['low_stock', ['low'], ['out_of_stock'], false], // got worse
     ['low_stock', ['out_of_stock'], ['low'], true], // partly restocked, still low

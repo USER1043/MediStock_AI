@@ -54,9 +54,23 @@ const addMedicine = (name, batches, overrides = {}) =>
     ...overrides,
   });
 
-// Replace a medicine's batches and recompute its quantity, like an inventory edit would
-const setBatches = (id, batches, extra = {}) =>
-  Medicine.updateOne({ _id: id }, { batches, quantity: batches.reduce((s, b) => s + b.quantity, 0), ...extra });
+// Edit a medicine's batches in place, keeping their _ids as inventory edits and top-ups do, and
+// recompute its quantity. changes: { [batchNumber]: { quantity?, expiryDate?, rackNumber? } | null (remove) }
+const editBatches = async (id, changes = {}, added = []) => {
+  const { batches } = await Medicine.findById(id).lean();
+  const next = batches
+    .filter((b) => changes[b.batchNumber] !== null)
+    .map((b) => ({ ...b, ...(changes[b.batchNumber] || {}) }))
+    .concat(added);
+  await Medicine.updateOne({ _id: id }, { batches: next, quantity: next.reduce((sum, b) => sum + b.quantity, 0) });
+};
+
+const batchIdOf = async (medicineId, batchNumber) =>
+  (await Medicine.findById(medicineId).lean()).batches.find((b) => b.batchNumber === batchNumber)._id;
+
+// The alerts for one batch, oldest first
+const batchAlerts = async (medicineId, batchNumber, alertType) =>
+  Alert.find({ medicineId, alertType, batchId: await batchIdOf(medicineId, batchNumber) }).sort({ createdAt: 1, _id: 1 }).lean();
 
 const alertsOf = (medicineId, alertType) =>
   Alert.find({ medicineId, alertType }).sort({ createdAt: 1, _id: 1 }).lean();
@@ -188,18 +202,29 @@ describe('markAlertsStaleOnWrite', () => {
 });
 
 describe('self-clearing', () => {
-  test('a near-expiry alert resolves itself when the batch sells out', async () => {
+  test('a near-expiry alert resolves itself when its batch sells out', async () => {
     const med = await addMedicine('Clearing Med', [batch('SOON-1', 3, 5), batch('OK-1', 200, 50)]);
     await service.generate();
 
     advance(MINUTE);
-    await setBatches(med._id, [batch('SOON-1', 3, 0), batch('OK-1', 200, 50)]);
+    await editBatches(med._id, { 'SOON-1': { quantity: 0 } });
     await service.generate();
 
     const [alert] = await alertsOf(med._id, 'near_expiry');
     expect(alert).toMatchObject({ isResolved: true, autoResolved: true, isCurrent: false, resolvedBy: null });
     expect(alert.resolvedAt).toEqual(clock());
     expect(alert.clearedAt).toEqual(clock());
+  });
+
+  test('a removed batch clears its alert', async () => {
+    const med = await addMedicine('Removed Med', [batch('OLD-1', -3, 5), batch('OK-1', 200, 50)]);
+    await service.generate();
+
+    await editBatches(med._id, { 'OLD-1': null });
+    await service.generate();
+
+    const [alert] = await alertsOf(med._id, 'expired');
+    expect(alert).toMatchObject({ isResolved: true, autoResolved: true, isCurrent: false });
   });
 
   test('a low-stock alert resolves itself after a restock, and overstock after stock drops', async () => {
@@ -209,8 +234,8 @@ describe('self-clearing', () => {
     expect(await alertsOf(low._id, 'low_stock')).toHaveLength(1);
     expect(await alertsOf(over._id, 'overstock')).toHaveLength(1);
 
-    await setBatches(low._id, [batch('L-1', 200, 20)]);
-    await setBatches(over._id, [batch('O-1', 200, 20)]);
+    await editBatches(low._id, { 'L-1': { quantity: 20 } });
+    await editBatches(over._id, { 'O-1': { quantity: 20 } });
     await service.generate();
 
     const [lowAlert] = await alertsOf(low._id, 'low_stock');
@@ -220,60 +245,139 @@ describe('self-clearing', () => {
   });
 
   test("a deleted medicine's alerts resolve themselves", async () => {
-    const med = await addMedicine('Gone Med', [batch('OLD-1', -3, 5)]);
+    const med = await addMedicine('Gone Med', [batch('OLD-1', -3, 5), batch('OLD-2', -1, 5)]);
     await service.generate();
+    expect(await alertsOf(med._id, 'expired')).toHaveLength(2);
 
     await Medicine.deleteOne({ _id: med._id });
     await service.generate();
 
-    const [alert] = await alertsOf(med._id, 'expired');
-    expect(alert).toMatchObject({ isResolved: true, autoResolved: true, isCurrent: false });
+    const alerts = await alertsOf(med._id, 'expired');
+    expect(alerts.every((a) => a.isResolved && a.autoResolved && !a.isCurrent)).toBe(true);
   });
 });
 
-describe('open alerts are updated, not duplicated', () => {
-  test('a second batch starting to expire updates the unresolved alert', async () => {
-    const med = await addMedicine('Growing Med', [batch('SOON-1', 3, 5, 'A1'), batch('LATER-1', 30, 9, 'B2')]);
-    await service.generate();
-    const [before] = await alertsOf(med._id, 'near_expiry');
-
-    advance(25 * DAY); // LATER-1 now has 5 days left; SOON-1 has expired
-    await setBatches(med._id, [batch('SOON-1', -22, 0, 'A1'), batch('LATER-1', 5, 9, 'B2'), batch('NEW-1', 6, 3, 'C3')]);
+describe('expiry alerts are per batch', () => {
+  test('two expiring batches give two alerts, each naming its own batch', async () => {
+    const med = await addMedicine('Two Med', [batch('A-1', 2, 5, 'R1'), batch('B-1', 5, 7, 'R2'), batch('OK-1', 200, 50)]);
     await service.generate();
 
-    const alerts = await alertsOf(med._id, 'near_expiry');
-    expect(alerts).toHaveLength(1);
-    const [after] = alerts;
-    expect(after._id).toEqual(before._id);
-    expect(after.isResolved).toBe(false);
-    expect(after.fingerprint).toHaveLength(2);
-    expect(after.message).toContain('LATER-1');
-    expect(after.message).toContain('NEW-1');
-    expect(after.message).not.toContain('SOON-1');
-    expect(after.batches.map((b) => b.rackNumber).sort()).toEqual(['B2', 'C3']);
-    expect(after.lastChangedAt).toEqual(clock());
-    expect(after.createdAt).toEqual(before.createdAt);
+    const [a] = await batchAlerts(med._id, 'A-1', 'near_expiry');
+    const [b] = await batchAlerts(med._id, 'B-1', 'near_expiry');
+    expect(await alertsOf(med._id, 'near_expiry')).toHaveLength(2);
+    expect(a.message).toMatch(/^Batch A-1 expires on \d{2} \w{3} \d{4} \(rack R1, qty 5\)$/);
+    expect(b.message).toMatch(/^Batch B-1 expires on .* \(rack R2, qty 7\)$/);
+    expect(a.batch).toMatchObject({ batchNumber: 'A-1', rackNumber: 'R1', quantity: 5 });
+    expect(a.message).not.toContain('B-1');
   });
 
-  test('a quantity change refreshes the message without counting as a change', async () => {
-    const med = await addMedicine('Selling Med', [batch('SOON-1', 3, 8)]);
+  test('resolving one batch alert leaves the other open', async () => {
+    const med = await addMedicine('Split Med', [batch('A-1', 2, 5), batch('B-1', 5, 7), batch('OK-1', 200, 50)]);
+    await service.generate();
+    const [a] = await batchAlerts(med._id, 'A-1', 'near_expiry');
+    await userResolve(a._id);
+
+    await service.generate();
+
+    expect(await batchAlerts(med._id, 'A-1', 'near_expiry')).toEqual([expect.objectContaining({ isResolved: true, isCurrent: true })]);
+    expect(await batchAlerts(med._id, 'B-1', 'near_expiry')).toEqual([expect.objectContaining({ isResolved: false, isCurrent: true })]);
+  });
+
+  test('one batch selling out clears only its own alert', async () => {
+    const med = await addMedicine('Sellout Med', [batch('A-1', 2, 5), batch('B-1', 5, 7), batch('OK-1', 200, 50)]);
+    await service.generate();
+    const [bBefore] = await batchAlerts(med._id, 'B-1', 'near_expiry');
+
+    await editBatches(med._id, { 'A-1': { quantity: 0 } });
+    await service.generate();
+
+    expect(await batchAlerts(med._id, 'A-1', 'near_expiry')).toEqual([
+      expect.objectContaining({ isResolved: true, autoResolved: true, isCurrent: false }),
+    ]);
+    const [bAfter] = await batchAlerts(med._id, 'B-1', 'near_expiry');
+    expect(bAfter).toMatchObject({ _id: bBefore._id, isResolved: false, isCurrent: true });
+  });
+
+  test('a new expiring batch raises only its own alert', async () => {
+    const med = await addMedicine('Growing Med', [batch('A-1', 2, 5), batch('OK-1', 200, 50)]);
+    await service.generate();
+    const [aBefore] = await batchAlerts(med._id, 'A-1', 'near_expiry');
+    await userResolve(aBefore._id);
+
+    await editBatches(med._id, {}, [batch('NEW-1', 6, 3, 'C3')]);
+    await service.generate();
+
+    expect(await batchAlerts(med._id, 'A-1', 'near_expiry')).toEqual([
+      expect.objectContaining({ _id: aBefore._id, isResolved: true, isCurrent: true }),
+    ]);
+    const newAlerts = await batchAlerts(med._id, 'NEW-1', 'near_expiry');
+    expect(newAlerts).toHaveLength(1);
+    expect(newAlerts[0]).toMatchObject({ isResolved: false, batch: { batchNumber: 'NEW-1', rackNumber: 'C3' } });
+  });
+
+  test('a quantity or rack change refreshes the message without counting as a change', async () => {
+    const med = await addMedicine('Selling Med', [batch('SOON-1', 3, 8, 'A1')]);
     await service.generate();
     const [before] = await alertsOf(med._id, 'near_expiry');
 
     advance(MINUTE);
-    await setBatches(med._id, [batch('SOON-1', 3, 6)]);
+    await editBatches(med._id, { 'SOON-1': { quantity: 6, rackNumber: 'B7' } });
     await service.generate();
 
-    const [after] = await alertsOf(med._id, 'near_expiry');
-    expect(after.message).toContain('qty 6');
-    expect(after.lastChangedAt).toEqual(before.lastChangedAt);
+    const alerts = await alertsOf(med._id, 'near_expiry');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]._id).toEqual(before._id);
+    expect(alerts[0].message).toContain('(rack B7, qty 6)');
+    expect(alerts[0].batch).toMatchObject({ rackNumber: 'B7', quantity: 6 });
+    expect(alerts[0].lastChangedAt).toEqual(before.lastChangedAt);
   });
 
+  test('an expiry edit within the window updates the alert in place; moving it out of the window clears it', async () => {
+    const med = await addMedicine('Edited Med', [batch('E-1', 3, 8)]);
+    await service.generate();
+    const [before] = await alertsOf(med._id, 'near_expiry');
+
+    advance(MINUTE);
+    await editBatches(med._id, { 'E-1': { expiryDate: daysFromNow(5) } });
+    await service.generate();
+    const [moved] = await alertsOf(med._id, 'near_expiry');
+    expect(moved).toMatchObject({ _id: before._id, isResolved: false, isCurrent: true });
+    expect(moved.lastChangedAt).toEqual(clock());
+    expect(moved.message).not.toBe(before.message);
+    expect(new Date(moved.batch.expiryDate)).toEqual(daysFromNow(5));
+
+    await editBatches(med._id, { 'E-1': { expiryDate: daysFromNow(60) } });
+    await service.generate();
+    const alerts = await alertsOf(med._id, 'near_expiry');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ isResolved: true, autoResolved: true, isCurrent: false });
+  });
+
+  test('the database allows one current alert per batch and type, and one current low_stock per medicine', async () => {
+    const med = await addMedicine('Unique Med', [batch('OLD-1', -3, 2), batch('OLD-2', -2, 1)]);
+    await service.generate();
+    const oldOne = await batchIdOf(med._id, 'OLD-1');
+
+    // Two expired batches coexist as current alerts, and also with a near_expiry one for the same batch
+    expect(await Alert.countDocuments({ medicineId: med._id, alertType: 'expired', isCurrent: true })).toBe(2);
+    await Alert.create({ medicineId: med._id, alertType: 'near_expiry', batchId: oldOne, message: 'other type' });
+
+    await expect(
+      Alert.create({ medicineId: med._id, alertType: 'expired', batchId: oldOne, message: 'dup', isCurrent: true })
+    ).rejects.toMatchObject({ code: 11000 });
+    expect(await alertsOf(med._id, 'low_stock')).toHaveLength(1); // quantity 3 against a reorder level of 10
+    await expect(
+      Alert.create({ medicineId: med._id, alertType: 'low_stock', message: 'dup', isCurrent: true })
+    ).rejects.toMatchObject({ code: 11000 });
+  });
+});
+
+describe('open stock alerts are updated, not duplicated', () => {
   test('low stock running out updates the unresolved alert', async () => {
     const med = await addMedicine('Running Med', [batch('R-1', 200, 3)]);
     await service.generate();
 
-    await setBatches(med._id, [batch('R-1', 200, 0)]);
+    await editBatches(med._id, { 'R-1': { quantity: 0 } });
     await service.generate();
 
     const alerts = await alertsOf(med._id, 'low_stock');
@@ -284,14 +388,17 @@ describe('open alerts are updated, not duplicated', () => {
 });
 
 describe('resolving acknowledges until the situation changes', () => {
-  test('an acknowledged near-expiry alert is not raised again on later runs', async () => {
+  test('an acknowledged batch alert stays quiet across reruns', async () => {
     const med = await addMedicine('Ack Med', [batch('SOON-1', 3, 5)]);
     await service.generate();
     const [alert] = await alertsOf(med._id, 'near_expiry');
     await userResolve(alert._id);
 
-    advance(DEFAULT_STALE_AFTER_MS);
-    await service.refreshIfStale();
+    for (let i = 0; i < 3; i++) {
+      advance(DEFAULT_STALE_AFTER_MS);
+      await service.refreshIfStale();
+    }
+    await editBatches(med._id, { 'SOON-1': { quantity: 4 } }); // a sale is not a new situation
     await service.generate();
 
     const alerts = await alertsOf(med._id, 'near_expiry');
@@ -299,33 +406,40 @@ describe('resolving acknowledges until the situation changes', () => {
     expect(alerts[0]).toMatchObject({ isResolved: true, isCurrent: true, resolvedByName: 'owner' });
   });
 
-  test('a second batch starting to expire raises a new alert after an acknowledgement', async () => {
-    const med = await addMedicine('Ack Grow Med', [batch('SOON-1', 3, 5), batch('NEXT-1', 20, 7)]);
+  test('near expiry -> expired raises a critical alert even though the near-expiry one was acknowledged', async () => {
+    const med = await addMedicine('Turning Med', [batch('T-1', 2, 5), batch('OK-1', 200, 50)]);
     await service.generate();
-    const [first] = await alertsOf(med._id, 'near_expiry');
+    const [near] = await batchAlerts(med._id, 'T-1', 'near_expiry');
+    await userResolve(near._id);
+
+    advance(3 * DAY); // T-1 is now one day past its expiry
+    await service.generate();
+
+    const [nearAfter] = await batchAlerts(med._id, 'T-1', 'near_expiry');
+    expect(nearAfter).toMatchObject({ isResolved: true, autoResolved: false, isCurrent: false, resolvedByName: 'owner' });
+    expect(nearAfter.clearedAt).toEqual(clock());
+    const expired = await batchAlerts(med._id, 'T-1', 'expired');
+    expect(expired).toHaveLength(1);
+    expect(expired[0]).toMatchObject({ severity: 'critical', isResolved: false, isCurrent: true });
+    expect(expired[0].message).toMatch(/^Batch T-1 expired on .* and is still in stock \(rack R1, qty 5\)$/);
+  });
+
+  test('an acknowledged batch that hits zero and is restocked while still expiring raises a new alert', async () => {
+    const med = await addMedicine('Restocked Med', [batch('S-1', 4, 5), batch('OK-1', 200, 50)]);
+    await service.generate();
+    const [first] = await batchAlerts(med._id, 'S-1', 'near_expiry');
     await userResolve(first._id);
 
-    advance(14 * DAY); // NEXT-1 now has 6 days left
-    await setBatches(med._id, [batch('SOON-1', -11, 0), batch('NEXT-1', 6, 7)]);
+    await editBatches(med._id, { 'S-1': { quantity: 0 } });
+    await service.generate();
+    await editBatches(med._id, { 'S-1': { quantity: 6 } }); // same batch (_id), topped up again
     await service.generate();
 
-    const alerts = await alertsOf(med._id, 'near_expiry');
+    const alerts = await batchAlerts(med._id, 'S-1', 'near_expiry');
     expect(alerts).toHaveLength(2);
     expect(alerts[0]).toMatchObject({ _id: first._id, isResolved: true, isCurrent: false });
     expect(alerts[1]).toMatchObject({ isResolved: false, isCurrent: true });
-    expect(alerts[1].message).toContain('NEXT-1');
-  });
-
-  test('one of two acknowledged batches selling out does not raise a new alert', async () => {
-    const med = await addMedicine('Ack Shrink Med', [batch('A-1', 3, 5), batch('B-1', 4, 5)]);
-    await service.generate();
-    const [alert] = await alertsOf(med._id, 'near_expiry');
-    await userResolve(alert._id);
-
-    await setBatches(med._id, [batch('A-1', 3, 0), batch('B-1', 4, 5)]);
-    await service.generate();
-
-    expect(await alertsOf(med._id, 'near_expiry')).toHaveLength(1);
+    expect(alerts[1].message).toContain('qty 6');
   });
 
   test('acknowledged low stock: restock above the threshold, then drop below again -> new alert', async () => {
@@ -334,13 +448,13 @@ describe('resolving acknowledges until the situation changes', () => {
     const [first] = await alertsOf(med._id, 'low_stock');
     await userResolve(first._id);
 
-    await setBatches(med._id, [batch('L-1', 200, 30)]);
+    await editBatches(med._id, { 'L-1': { quantity: 30 } });
     await service.generate();
     const [cleared] = await alertsOf(med._id, 'low_stock');
     expect(cleared).toMatchObject({ isResolved: true, isCurrent: false, autoResolved: false, resolvedByName: 'owner' });
     expect(cleared.clearedAt).toEqual(clock());
 
-    await setBatches(med._id, [batch('L-1', 200, 3)]); // same "low" fingerprint as before
+    await editBatches(med._id, { 'L-1': { quantity: 3 } }); // same "low" fingerprint as before
     await service.generate();
 
     const alerts = await alertsOf(med._id, 'low_stock');
@@ -354,22 +468,13 @@ describe('resolving acknowledges until the situation changes', () => {
     const [first] = await alertsOf(med._id, 'low_stock');
     await userResolve(first._id);
 
-    await setBatches(med._id, [batch('Z-1', 200, 0)]);
+    await editBatches(med._id, { 'Z-1': { quantity: 0 } });
     await service.generate();
 
     const alerts = await alertsOf(med._id, 'low_stock');
     expect(alerts).toHaveLength(2);
     expect(alerts[0]).toMatchObject({ isCurrent: false, fingerprint: ['low'] });
     expect(alerts[1]).toMatchObject({ isResolved: false, isCurrent: true, fingerprint: ['out_of_stock'] });
-  });
-
-  test('the database refuses a second current alert for the same medicine and type', async () => {
-    const med = await addMedicine('Unique Med', [batch('OLD-1', -3, 5)]);
-    await service.generate();
-
-    await expect(
-      Alert.create({ medicineId: med._id, alertType: 'expired', message: 'dup', isCurrent: true })
-    ).rejects.toMatchObject({ code: 11000 });
   });
 });
 
