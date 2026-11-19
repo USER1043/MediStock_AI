@@ -133,7 +133,7 @@ export const auditLogger = (req, res, next) => {
             action: resolved.action,
             module: resolved.module,
             details: {
-                body: sanitiseBody(req.body),
+                body: redactSecrets(req.body),
                 params: req.params,
             },
             ipAddress: clientIp(req),
@@ -174,7 +174,7 @@ export const createAuditEntry = async ({
             username,
             action,
             module,
-            details,
+            details: redactSecrets(details),
             ipAddress,
             httpMethod,
             endpoint,
@@ -186,14 +186,65 @@ export const createAuditEntry = async ({
     }
 };
 
-// ── Helper: strip sensitive fields before logging ─────────────────
-const SENSITIVE_KEYS = new Set(['password', 'token', 'secret', 'key', 'auth']);
+// ── Helper: strip secrets before logging ─────────────────────────
+export const REDACTED = '[REDACTED]';
+export const REDACT_MAX_DEPTH = 8; // deeper values become '[Truncated]'
+export const REDACT_MAX_ITEMS = 100; // longer arrays keep their first 100 items plus a count
 
-function sanitiseBody(body) {
-    if (!body || typeof body !== 'object') return body;
-    const safe = {};
-    for (const [k, v] of Object.entries(body)) {
-        safe[k] = SENSITIVE_KEYS.has(k.toLowerCase()) ? '[REDACTED]' : v;
+// A key is sensitive when its last word is one of these: password, newPassword, current_password,
+// accessToken, refresh_token, twoFactorSecret, Authorization, ...
+const SENSITIVE_LAST_WORDS = new Set([
+    'password', 'passwords', 'passwd', 'passphrase',
+    'token', 'tokens', 'secret', 'secrets',
+    'authorization', 'cookie', 'cookies',
+]);
+// ...or when the whole key (words joined) is one of these. Deliberately exact, so lookalikes such
+// as keyword, monkey, author, pincode or bypass are kept.
+const SENSITIVE_KEYS = new Set([
+    'key', 'auth', 'pass', 'pwd', 'pin', 'otp', 'totp', 'cvv', 'cvc',
+    'apikey', 'privatekey', 'secretkey', 'accesskey', 'signingkey', 'encryptionkey',
+]);
+
+// "newPassword" → ['new', 'password'], "API_KEY" → ['api', 'key'], "x-auth-token" → ['x', 'auth', 'token']
+const keyWords = (key) =>
+    String(key)
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
+
+export const isSensitiveKey = (key) => {
+    const words = keyWords(key);
+    if (words.length === 0) return false;
+    return SENSITIVE_LAST_WORDS.has(words[words.length - 1]) || SENSITIVE_KEYS.has(words.join(''));
+};
+
+const isPlainObject = (value) => {
+    if (value === null || typeof value !== 'object') return false;
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+};
+
+/**
+ * A copy of `value` with every sensitive key's value replaced by '[REDACTED]', at any depth, through
+ * plain objects and arrays. Other values (strings, numbers, dates, ids) are kept as they are.
+ */
+export const redactSecrets = (value, depth = 0) => {
+    if (Array.isArray(value) || isPlainObject(value)) {
+        if (depth >= REDACT_MAX_DEPTH) return '[Truncated]';
     }
-    return safe;
-}
+    if (Array.isArray(value)) {
+        const kept = value.slice(0, REDACT_MAX_ITEMS).map((item) => redactSecrets(item, depth + 1));
+        if (value.length > REDACT_MAX_ITEMS) kept.push(`[+${value.length - REDACT_MAX_ITEMS} more]`);
+        return kept;
+    }
+    if (isPlainObject(value)) {
+        const safe = {};
+        for (const [k, v] of Object.entries(value)) {
+            safe[k] = isSensitiveKey(k) ? REDACTED : redactSecrets(v, depth + 1);
+        }
+        return safe;
+    }
+    return value;
+};
