@@ -32,7 +32,7 @@ Base URL (local): `http://localhost:5000/api`
 |--------|------|------|-------------|
 | GET | `/` | any | All medicines, sorted by earliest batch expiry (FEFO) |
 | GET | `/search` | any | Search medicines |
-| GET | `/low-stock` | any | Medicines at or below the low-stock threshold |
+| GET | `/low-stock` | any | Medicines at or below their reorder level (`out`, `critical`, `low`), most urgent first, each with `stockLevel` |
 | GET | `/near-expiry` | any | Medicines with batches expiring soon |
 | GET | `/expired` | any | Medicines with expired batches |
 | GET | `/history` | owner, staff | Inventory movement ledger |
@@ -119,11 +119,11 @@ The list endpoints and `/generate` also return `lastGeneratedAt` (this process's
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/dashboard/summary` | any | KPI summary |
+| GET | `/dashboard/summary` | any | KPI summary; `lowStockMedicines` and `inventory: {out, critical, low, ok}` use the shared stock levels |
 | GET | `/dashboard/analytics` | any | Chart data |
 | GET | `/sales` | owner | Sales report (`?period=&startDate=&endDate=`) |
 | GET | `/purchase` | owner | Purchase report |
-| GET | `/inventory` | any | Inventory report |
+| GET | `/inventory` | any | Inventory report: `outOfStockCount`, `criticalStockCount`, `lowStockCount` (everything at or below reorder level), `okStockCount` |
 | GET | `/forecast`, `/demand` | any | Legacy mock forecast (`calculateDemandForecast`: average × random ±20%). Not the LSTM. |
 | GET | `/classification` | any | Stock classification |
 

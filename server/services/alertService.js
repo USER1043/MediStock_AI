@@ -14,6 +14,7 @@
 import { Alert } from '../models/alertModel.js';
 import { Medicine } from '../models/medicineModel.js';
 import { getExpiringBatches } from '../utils/helpers.js';
+import { STOCK_LEVEL_RANK, getStockLevel } from '../utils/stockLevel.js';
 import log from '../utils/logger.js';
 
 const MINUTE = 60 * 1000;
@@ -63,6 +64,32 @@ const batchCondition = (alertType, batch) => {
 };
 
 /**
+ * The low_stock condition for a medicine, or null when stock is above its reorder level.
+ * Levels come from utils/stockLevel.js: out and critical are 'critical' severity, low is 'warning'.
+ * The fingerprint is the level, so moving between levels updates an open alert (message,
+ * severity, lastChangedAt) and restocking above the reorder level closes it.
+ */
+export const lowStockCondition = (medicine) => {
+  const { quantity, reorderLevel } = medicine;
+  const level = getStockLevel(quantity, reorderLevel);
+  if (level === 'ok') return null;
+  const shownLevel = Number(reorderLevel) > 0 ? Number(reorderLevel) : 0;
+  const messages = {
+    out: `Out of stock — reorder now (reorder level ${shownLevel})`,
+    critical: `Critically low: ${quantity} left (reorder level ${shownLevel})`,
+    low: `Low stock: ${quantity} left (reorder level ${shownLevel})`,
+  };
+  return {
+    alertType: 'low_stock',
+    severity: level === 'low' ? 'warning' : 'critical',
+    fingerprint: [level],
+    message: messages[level],
+    batchId: null,
+    batch: null,
+  };
+};
+
+/**
  * Lists the alert conditions that currently hold for one medicine: at most one low_stock and
  * one overstock, plus one near_expiry or expired condition per in-stock batch.
  * @returns {Array<{alertType, severity, message, fingerprint, batchId, batch}>}
@@ -71,19 +98,8 @@ export const evaluateMedicine = (medicine, now = new Date()) => {
   const conditions = [];
   const { quantity = 0, reorderLevel = 0 } = medicine;
 
-  if (quantity <= reorderLevel / 2) {
-    const outOfStock = quantity <= 0;
-    conditions.push({
-      alertType: 'low_stock',
-      severity: 'critical',
-      fingerprint: [outOfStock ? 'out_of_stock' : 'low'],
-      message: outOfStock
-        ? `Out of stock – Add stock immediately. Reorder Level: ${reorderLevel}`
-        : `Stock going to less – Add stock immediately. Current: ${quantity}, Reorder Level: ${reorderLevel}`,
-      batchId: null,
-      batch: null,
-    });
-  }
+  const stock = lowStockCondition(medicine);
+  if (stock) conditions.push(stock);
 
   const { nearExpiry, expired } = getExpiringBatches(medicine.batches, EXPIRY_WINDOW_DAYS, now);
   for (const batch of expired) conditions.push(batchCondition('expired', batch));
@@ -108,13 +124,16 @@ export const evaluateMedicine = (medicine, now = new Date()) => {
  * Batch alerts (near_expiry, expired): yes while the batch keeps the same expiry day (the
  * fingerprint), so sales and rack moves stay silent; an expiry edit is a new situation and
  * re-raises. Clearing and returning also re-raises (clearing closes the acknowledged alert).
- * Low stock: same level, or "out of stock" was acknowledged and stock is now merely low.
+ * Low stock: same level or a less urgent one (acknowledged "out" covers critical and low;
+ * "critical" covers low). Getting worse re-raises.
  * Overstock: presence only.
  */
 export const acknowledgementCovers = (alertType, acknowledged = [], current = []) => {
   if (sameList(acknowledged, current)) return true;
   if (alertType === 'low_stock') {
-    return acknowledged[0] === 'out_of_stock' && current[0] === 'low';
+    const was = STOCK_LEVEL_RANK[acknowledged[0]];
+    const now = STOCK_LEVEL_RANK[current[0]];
+    return was !== undefined && now !== undefined && now >= was;
   }
   return false;
 };

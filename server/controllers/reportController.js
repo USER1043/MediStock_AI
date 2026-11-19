@@ -4,6 +4,7 @@ import { InventoryHistory } from '../models/inventoryHistoryModel.js';
 import { Alert } from '../models/alertModel.js';
 import { alertService } from '../services/alertService.js';
 import { calculateDemandForecast, classifyMovement, getExpiringBatches } from '../utils/helpers.js';
+import { countStockLevels, isMedicineLowStock, sortByUrgency, stockLevelOf } from '../utils/stockLevel.js';
 import log from '../utils/logger.js';
 
 // Get sales report
@@ -96,7 +97,7 @@ export const getPurchaseReport = async (req, res) => {
       0
     );
     const totalMedicines = medicines.length;
-    const lowStockCount = medicines.filter(m => m.quantity <= m.reorderLevel / 2).length;
+    const lowStockCount = medicines.filter(isMedicineLowStock).length;
 
     res.status(200).json({
       success: true,
@@ -127,18 +128,18 @@ export const getInventoryReport = async (req, res) => {
       (sum, med) => sum + med.sellingPrice * med.quantity,
       0
     );
-    const highStockCount = medicines.filter(m => m.stockStatus === 'high').length;
-    const mediumStockCount = medicines.filter(m => m.stockStatus === 'medium').length;
-    const lowStockCount = medicines.filter(m => m.stockStatus === 'low').length;
+    // Computed live from quantity and reorderLevel (utils/stockLevel.js), not the stored stockStatus
+    const levels = countStockLevels(medicines);
 
     res.status(200).json({
       success: true,
       report: {
         totalValue,
         totalMedicines: medicines.length,
-        highStockCount,
-        mediumStockCount,
-        lowStockCount,
+        outOfStockCount: levels.out,
+        criticalStockCount: levels.critical,
+        lowStockCount: levels.lowStock, // out + critical + low: at or below reorder level
+        okStockCount: levels.ok,
         medicines,
       },
     });
@@ -231,16 +232,18 @@ export const getDashboardSummary = async (req, res) => {
     today.setHours(0, 0, 0, 0);
     const todayBills = await Bill.find({ createdAt: { $gte: today } });
 
+    const levels = countStockLevels(medicines);
     const summary = {
       totalMedicines: medicines.length,
-      lowStockMedicines: medicines.filter(m => m.stockStatus === 'low').length,
+      lowStockMedicines: levels.lowStock, // at or below reorder level
       totalBills: bills.length,
       todaysSales: todayBills.reduce((sum, bill) => sum + bill.grandTotal, 0),
       todaysBills: todayBills.length,
       inventory: {
-        high: medicines.filter(m => m.stockStatus === 'high').length,
-        medium: medicines.filter(m => m.stockStatus === 'medium').length,
-        low: medicines.filter(m => m.stockStatus === 'low').length,
+        out: levels.out,
+        critical: levels.critical,
+        low: levels.low,
+        ok: levels.ok,
       },
     };
 
@@ -395,7 +398,8 @@ export const getDashboardAnalytics = async (req, res) => {
 
     // ── 4. Active Alerts Summary ─────────────────────────────
     const allMedicines = await Medicine.find().select('name category quantity reorderLevel batches _id').lean();
-    const lowStockMeds = allMedicines.filter((m) => m.quantity <= m.reorderLevel);
+    // At or below reorder level, most urgent first (the dashboard shows the first 10)
+    const lowStockMeds = sortByUrgency(allMedicines.filter(isMedicineLowStock));
     // Expiry is tracked per batch: report each medicine's in-stock batches expiring within 7 days
     const nearExpiryMeds = allMedicines
       .map((m) => ({ medicine: m, batches: getExpiringBatches(m.batches, 7).nearExpiry }))
@@ -444,7 +448,7 @@ export const getDashboardAnalytics = async (req, res) => {
         stockDistribution,
         forecastComparison,
         alertSummary,
-        lowStockMeds: lowStockMeds.slice(0, 10).map(({ batches, ...m }) => m),
+        lowStockMeds: lowStockMeds.slice(0, 10).map(({ batches, ...m }) => ({ ...m, stockLevel: stockLevelOf(m) })),
         nearExpiryMeds: nearExpiryMeds.slice(0, 10),
         categories,
       },

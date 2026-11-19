@@ -2,6 +2,8 @@
  * @file Helper utilities and shared constants for MediStock.
  * @module utils/helpers
  */
+import { getStockLevel, isLowStock, STOCK_LEVEL_META } from './stockLevel';
+
 /**
  * Calculate days until expiry
  */
@@ -30,17 +32,13 @@ export const getExpiryStatus = (expiryDate) => {
 };
 
 /**
- * Get stock status based on quantity and reorder level
+ * Get stock status based on quantity and reorder level ({ status, color, label }).
+ * The levels are defined in ./stockLevel.js, mirroring the server.
  */
 export const getStockStatus = (quantity, reorderLevel) => {
-  if (quantity === 0) {
-    return { status: 'out', color: 'red', label: 'Out of Stock' };
-  } else if (quantity <= reorderLevel) {
-    return { status: 'low', color: 'red', label: 'Low Stock' };
-  } else if (quantity <= reorderLevel * 1.5) {
-    return { status: 'medium', color: 'yellow', label: 'Medium Stock' };
-  }
-  return { status: 'high', color: 'green', label: 'Over Stock' };
+  const status = getStockLevel(quantity, reorderLevel);
+  const { color, label } = STOCK_LEVEL_META[status];
+  return { status, color, label };
 };
 
 /**
@@ -114,7 +112,7 @@ export const filterMedicines = (medicines, searchQuery) => {
  */
 export const calculateKPIs = (medicines) => {
   const total = medicines.length;
-  const lowStock = medicines.filter(m => getStockStatus(m.quantity, m.reorderLevel).status === 'low').length;
+  const lowStock = medicines.filter(m => isLowStock(m.quantity, m.reorderLevel)).length;
 
   // Expiry is relative to the absolute closest batch for any medicine
   const nearExpiry = medicines.filter(m => {
