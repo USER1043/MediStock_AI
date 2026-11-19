@@ -118,7 +118,7 @@ sequenceDiagram
     API->>DB: AuditLog FORECAST_RUN
     API-->>DS: {count}
 
-    Note over DS,API: Also triggered automatically after every Excel import<br/>(ExcelUpload.jsx → POST /api/forecast/retrain)
+    Note over DS,API: Also triggered automatically after an owner's Excel import<br/>(ExcelUpload.jsx → POST /api/forecast/retrain, owner-only)
 
     O->>FR: open Forecast Review
     FR->>API: GET /api/forecast/recommendations
@@ -140,7 +140,7 @@ There is also a simpler, rule-based path: `POST /api/suppliers/reorder/generate`
 | 7 days of history exactly | LSTM needs `windowSize + 1` points, so it falls back to a moving average |
 | No supplier in the database | That medicine is skipped (no draft) |
 | Forecast re-run | **All** existing `AI_Draft` POs are deleted first, including ones created manually |
-| Excel import finishes | The client fires `POST /api/forecast/retrain` ("continuous learning"), which runs the full forecast again |
+| Excel import finishes | For an owner, the client fires `POST /api/forecast/retrain` ("continuous learning"), which runs the full forecast again. For staff it doesn't (retrain is owner-only); the result shows that forecasts update when an owner runs them |
 
 ---
 
@@ -204,7 +204,9 @@ sequenceDiagram
     API->>DB: AuditLog EXCEL_UPLOAD {totals, anomalies}
     API->>API: delete temp file
     API-->>UI: {recordsProcessed, recordsSuccessful, recordsFailed, anomalies}
-    UI-)API: POST /api/forecast/retrain (fire-and-forget, re-runs forecasting)
+    opt user is owner
+        UI-)API: POST /api/forecast/retrain (fire-and-forget, re-runs forecasting)
+    end
 ```
 
 Expected columns: `name, category, batchNumber, expiryDate, quantity, rackNumber, purchasePrice, sellingPrice, reorderLevel`.

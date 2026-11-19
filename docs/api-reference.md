@@ -106,7 +106,7 @@ The list endpoints and `/generate` also return `lastGeneratedAt` (this process's
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/run` | owner | Delete existing AI drafts, run the forecast for every medicine, create new `AI_Draft` POs |
-| POST | `/retrain` | any | Same as `/run` (called after Excel import) |
+| POST | `/retrain` | owner | Same as `/run`, logged as `MODEL_RETRAINED` (called after an owner's Excel import) |
 | GET | `/recommendations` | any | Forecast-originated POs mapped to `{predictedDemand, optimalReorderQty, priority, status}` |
 | POST | `/recommendations` | any | Manual recommendation (creates an `AI_Draft`) |
 | PUT | `/recommendations/:id` | any | `{status: approved\|rejected\|adjusted\|pending, approvedQty?, optimalReorderQty?, priority?, restockingDate?}` |

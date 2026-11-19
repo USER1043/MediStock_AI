@@ -1,6 +1,6 @@
 # Demand Forecasting
 
-> **TL;DR** — For each medicine, the server builds a daily sales series (up to 90 days) from bills and stock history, trains a small **LSTM with TensorFlow.js** on it, predicts demand for the next `horizon × 7` days, applies a **monthly seasonal multiplier**, and turns that into a **reorder quantity** using lead time and safety stock. Medicines that need stock become `AI_Draft` purchase orders for a human to approve. Everything runs **in the API process**, either when the owner clicks *Run forecast* on the Demand Setup page or automatically after each Excel import.
+> **TL;DR** — For each medicine, the server builds a daily sales series (up to 90 days) from bills and stock history, trains a small **LSTM with TensorFlow.js** on it, predicts demand for the next `horizon × 7` days, applies a **monthly seasonal multiplier**, and turns that into a **reorder quantity** using lead time and safety stock. Medicines that need stock become `AI_Draft` purchase orders for a human to approve. Everything runs **in the API process**, either when the owner clicks *Run forecast* on the Demand Setup page or automatically after each Excel import by an owner (`/retrain` is owner-only, so staff imports don't trigger it).
 
 ---
 
@@ -125,7 +125,7 @@ In the UI, `GET /api/forecast/trend` shows 14 days of actual sales against predi
 - **The trend chart can show synthetic predictions.** When no stored forecast exists for a day, `getTrendData` fills the *predicted* line with the actual (or average) value times a deterministic pseudo-random factor (0.88–1.14). That line is illustrative, not a real forecast.
 - **Bills and history may double count.** `prepareHistoricalData` adds sales from completed bills *and* `InventoryHistory` rows with `action: 'sale'`, and `createBill` writes both for every sale.
 - **Blocking, synchronous run.** A large catalogue makes `POST /forecast/run` slow and ties up CPU for other requests.
-- **Re-running deletes all `AI_Draft` POs**, including manually created ones. Because every Excel import triggers a re-run, a bulk import silently discards drafts the owner was in the middle of reviewing.
+- **Re-running deletes all `AI_Draft` POs**, including manually created ones. Because every owner Excel import triggers a re-run, an owner's bulk import silently discards drafts that were still being reviewed. (Staff imports don't re-run the forecast.)
 - `category: medicine.category?.name` is always `'Uncategorized'` because `category` is a string.
 
 ## Future improvements

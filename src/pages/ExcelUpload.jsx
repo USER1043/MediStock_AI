@@ -4,11 +4,15 @@
  */
 import { useState, useEffect, useRef } from 'react';
 import axiosInstance from '../utils/axiosConfig';
-import { FaFileExcel, FaUpload, FaDownload, FaCheckCircle, FaTimesCircle, FaExclamationTriangle, FaSpinner } from 'react-icons/fa';
+import { useAuth } from '../context/AuthContext';
+import { FaFileExcel, FaUpload, FaDownload, FaCheckCircle, FaTimesCircle, FaExclamationTriangle, FaInfoCircle, FaSpinner } from 'react-icons/fa';
 
 const TEMPLATE_HEADERS = ['name', 'category', 'batchNumber', 'expiryDate', 'quantity', 'purchasePrice', 'sellingPrice', 'rackNumber', 'reorderLevel', 'supplier'];
 
 const ExcelUpload = () => {
+  const { hasRole } = useAuth();
+  // Retraining replaces every AI draft purchase order, so the API allows it for owners only
+  const canRetrain = hasRole('owner');
   const [activeTab, setActiveTab] = useState('import');
   const [dragOver, setDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -65,11 +69,14 @@ const ExcelUpload = () => {
       const res = await axiosInstance.post('/uploads/excel', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setUploadResult({ success: true, log: res.data.uploadLog });
+      setUploadResult({ success: true, log: res.data.uploadLog, forecastsDeferred: !canRetrain });
       setSelectedFile(null);
       fetchHistory();
-      // Continuous Learning: Trigger AI forecast retraining
-      axiosInstance.post('/forecast/retrain').catch(e => console.error('AI Retrain trigger failed:', e));
+      // Continuous Learning: owners retrain the AI forecast after each import; staff imports leave
+      // the current AI drafts alone until an owner runs the forecast
+      if (canRetrain) {
+        axiosInstance.post('/forecast/retrain').catch(e => console.error('AI Retrain trigger failed:', e));
+      }
 
     } catch (err) {
       setUploadResult({
@@ -238,6 +245,12 @@ const ExcelUpload = () => {
                           <div className="mt-3 flex items-center gap-2 text-yellow-700 text-sm">
                             <FaExclamationTriangle />
                             <span>{uploadResult.log.anomalies.length} anomalies detected</span>
+                          </div>
+                        )}
+                        {uploadResult.forecastsDeferred && (
+                          <div className="mt-3 flex items-center gap-2 text-blue-700 text-sm">
+                            <FaInfoCircle />
+                            <span>AI forecasts will update when an owner runs the forecast.</span>
                           </div>
                         )}
                       </div>
