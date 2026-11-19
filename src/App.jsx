@@ -9,6 +9,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Landing from './pages/Landing';
 import Dashboard from './pages/Dashboard';
+import Alerts from './pages/Alerts';
 import Inventory from './pages/Inventory';
 import Billing from './pages/Billing';
 import Reports from './pages/Reports';
@@ -40,6 +41,15 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['owner', 'staff']}>
                   <Dashboard />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/alerts"
+              element={
+                <ProtectedRoute allowedRoles={['owner', 'staff']}>
+                  <Alerts />
                 </ProtectedRoute>
               }
             />

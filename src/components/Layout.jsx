@@ -6,9 +6,10 @@ import { Link, useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   FaTachometerAlt, FaBoxes, FaFileInvoice, FaUsers, FaUsersCog,
-  FaChartLine, FaBrain, FaFileUpload, FaSignOutAlt, FaRobot, FaMoneyBillWave, FaPills, FaTruck, FaClipboardList, FaList, FaShieldAlt
+  FaChartLine, FaBrain, FaFileUpload, FaSignOutAlt, FaRobot, FaMoneyBillWave, FaPills, FaTruck, FaClipboardList, FaList, FaShieldAlt, FaBell
 } from 'react-icons/fa';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { alertAPI, ALERTS_CHANGED_EVENT } from '../utils/api';
 import Chatbot from './Chatbot';
 import SecuritySettingsModal from './SecuritySettingsModal';
 import logo from '../assets/logo.png';
@@ -21,6 +22,34 @@ const Layout = ({ children }) => {
   const [showChatbot, setShowChatbot] = useState(false);
   const [showSecurityModal, setShowSecurityModal] = useState(false);
 
+  // Unresolved critical alerts, shown as a badge on the Alerts link.
+  // Refreshed on navigation, every 60 s, and when a page reports that alerts changed.
+  const [criticalCount, setCriticalCount] = useState(0);
+  const canSeeAlerts = ['owner', 'staff'].includes(currentUser?.role);
+
+  const refreshCriticalCount = useCallback(async () => {
+    if (!canSeeAlerts) return;
+    try {
+      const { data } = await alertAPI.getCriticalAlerts();
+      setCriticalCount(data.count || 0);
+    } catch {
+      // keep the last known count; the badge is a hint, not a source of truth
+    }
+  }, [canSeeAlerts]);
+
+  useEffect(() => {
+    refreshCriticalCount();
+  }, [refreshCriticalCount, location.pathname]);
+
+  useEffect(() => {
+    const timer = setInterval(refreshCriticalCount, 60 * 1000);
+    window.addEventListener(ALERTS_CHANGED_EVENT, refreshCriticalCount);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener(ALERTS_CHANGED_EVENT, refreshCriticalCount);
+    };
+  }, [refreshCriticalCount]);
+
   // Handles user logout action and redirects to login.
   const handleLogout = () => {
     logout();
@@ -32,6 +61,7 @@ const Layout = ({ children }) => {
       title: 'Pharmacy Operations',
       items: [
         { path: '/dashboard', label: 'Dashboard', icon: <FaTachometerAlt />, roles: ['owner', 'staff'] },
+        { path: '/alerts', label: 'Alerts', icon: <FaBell />, roles: ['owner', 'staff'], badge: criticalCount },
         { path: '/billing', label: 'Billing POS', icon: <FaFileInvoice />, roles: ['owner', 'staff'] },
         { path: '/inventory', label: 'Live Stock', icon: <FaBoxes />, roles: ['owner', 'staff'] },
         { path: '/medicine-inventory', label: 'Medicine DB', icon: <FaPills />, roles: ['owner', 'staff'] },
@@ -103,6 +133,15 @@ const Layout = ({ children }) => {
                 >
                   <span className="text-xl">{item.icon}</span>
                   <span className="font-medium text-sm">{item.label}</span>
+                  {item.badge > 0 && (
+                    <span
+                      className={`ml-auto min-w-[1.5rem] text-center text-xs font-bold px-1.5 py-0.5 rounded-full ${location.pathname === item.path ? 'bg-white text-red-600' : 'bg-red-600 text-white'}`}
+                      title={`${item.badge} unresolved critical alert${item.badge === 1 ? '' : 's'}`}
+                      data-testid="alerts-badge"
+                    >
+                      {item.badge > 99 ? '99+' : item.badge}
+                    </span>
+                  )}
                 </Link>
               ))}
             </div>
