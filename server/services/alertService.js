@@ -6,14 +6,14 @@
  * Freshness: the time of the last successful run is held **in memory, per Node process**.
  * A fresh process (restart, new serverless instance) therefore regenerates on its first read,
  * and two processes each keep their own clock; the partial unique index on Alert
- * (one current alert per medicine and type) keeps concurrent runs from creating duplicates.
+ * (one current alert per medicine, type and batch) keeps concurrent runs from creating duplicates.
  * Stock-changing requests call `markStale()`, so the next read regenerates straight away
  * instead of waiting for the 15-minute window.
  */
 
 import { Alert } from '../models/alertModel.js';
 import { Medicine } from '../models/medicineModel.js';
-import { getExpiringBatches, describeBatches } from '../utils/helpers.js';
+import { getExpiringBatches } from '../utils/helpers.js';
 import log from '../utils/logger.js';
 
 const MINUTE = 60 * 1000;
@@ -28,21 +28,46 @@ export const EXPIRY_WINDOW_DAYS = 7;
 
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const dayOf = (date) => new Date(date).toISOString().slice(0, 10);
-const batchKey = (b) => `${b.batchNumber}@${dayOf(b.expiryDate)}`;
+// "23 Nov 2026"; expiry dates are stored as UTC midnight, so format in UTC
+const formatDay = (date) => {
+  const d = new Date(date);
+  return `${String(d.getUTCDate()).padStart(2, '0')} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+};
 const batchSnapshot = (b) => ({
   batchNumber: b.batchNumber,
   expiryDate: b.expiryDate,
   rackNumber: b.rackNumber || 'N/A',
   quantity: b.quantity,
 });
-const sortedUnique = (values) => [...new Set(values)].sort();
 const sameList = (a = [], b = []) => a.length === b.length && a.every((v, i) => v === b[i]);
-const pairKey = (medicineId, alertType) => `${medicineId}:${alertType}`;
+const idOf = (value) => (value ? value.toString() : '');
+// Identifies "the same alert" across runs: one per medicine and type, and per batch for expiry alerts
+const alertKey = (medicineId, alertType, batchId) => `${medicineId}:${alertType}:${idOf(batchId)}`;
+
+export const BATCH_ALERT_TYPES = ['near_expiry', 'expired'];
+
+const batchCondition = (alertType, batch) => {
+  const where = `(rack ${batch.rackNumber || 'N/A'}, qty ${batch.quantity})`;
+  return {
+    alertType,
+    severity: alertType === 'expired' ? 'critical' : 'warning',
+    batchId: batch._id ?? null,
+    batch: batchSnapshot(batch),
+    // The expiry day: an edit within the same condition updates the alert (lastChangedAt)
+    fingerprint: [dayOf(batch.expiryDate)],
+    message:
+      alertType === 'expired'
+        ? `Batch ${batch.batchNumber} expired on ${formatDay(batch.expiryDate)} and is still in stock ${where}`
+        : `Batch ${batch.batchNumber} expires on ${formatDay(batch.expiryDate)} ${where}`,
+  };
+};
 
 /**
- * Lists the alert conditions that currently hold for one medicine.
- * @returns {Array<{alertType, severity, message, fingerprint, batches}>}
+ * Lists the alert conditions that currently hold for one medicine: at most one low_stock and
+ * one overstock, plus one near_expiry or expired condition per in-stock batch.
+ * @returns {Array<{alertType, severity, message, fingerprint, batchId, batch}>}
  */
 export const evaluateMedicine = (medicine, now = new Date()) => {
   const conditions = [];
@@ -57,29 +82,14 @@ export const evaluateMedicine = (medicine, now = new Date()) => {
       message: outOfStock
         ? `Out of stock – Add stock immediately. Reorder Level: ${reorderLevel}`
         : `Stock going to less – Add stock immediately. Current: ${quantity}, Reorder Level: ${reorderLevel}`,
-      batches: [],
+      batchId: null,
+      batch: null,
     });
   }
 
   const { nearExpiry, expired } = getExpiringBatches(medicine.batches, EXPIRY_WINDOW_DAYS, now);
-  if (nearExpiry.length > 0) {
-    conditions.push({
-      alertType: 'near_expiry',
-      severity: 'warning',
-      fingerprint: sortedUnique(nearExpiry.map(batchKey)),
-      message: `Batches expiring within ${EXPIRY_WINDOW_DAYS} days: ${describeBatches(nearExpiry)}`,
-      batches: nearExpiry.map(batchSnapshot),
-    });
-  }
-  if (expired.length > 0) {
-    conditions.push({
-      alertType: 'expired',
-      severity: 'critical',
-      fingerprint: sortedUnique(expired.map(batchKey)),
-      message: `Expired batches still in stock: ${describeBatches(expired)}`,
-      batches: expired.map(batchSnapshot),
-    });
-  }
+  for (const batch of expired) conditions.push(batchCondition('expired', batch));
+  for (const batch of nearExpiry) conditions.push(batchCondition('near_expiry', batch));
 
   if (quantity > reorderLevel * 3) {
     conditions.push({
@@ -87,7 +97,8 @@ export const evaluateMedicine = (medicine, now = new Date()) => {
       severity: 'info',
       fingerprint: ['overstock'],
       message: `Overstock detected. Quantity: ${quantity}`,
-      batches: [],
+      batchId: null,
+      batch: null,
     });
   }
 
@@ -95,17 +106,15 @@ export const evaluateMedicine = (medicine, now = new Date()) => {
 };
 
 /**
- * Whether an acknowledged (user-resolved) alert still covers the current situation, i.e.
- * nothing new or worse has happened since. Expiry: no batch outside the acknowledged set
- * (batches selling out is not news). Low stock: same level, or "out of stock" was
- * acknowledged and stock is now merely low. Overstock: presence only.
+ * Whether an acknowledged (user-resolved) alert still covers the current situation.
+ * Batch alerts (near_expiry, expired): yes for as long as the condition keeps holding; it comes
+ * back only after it clears and returns (that closes the acknowledged alert, so a new one is raised).
+ * Low stock: same level, or "out of stock" was acknowledged and stock is now merely low.
+ * Overstock: presence only.
  */
 export const acknowledgementCovers = (alertType, acknowledged = [], current = []) => {
+  if (BATCH_ALERT_TYPES.includes(alertType)) return true;
   if (sameList(acknowledged, current)) return true;
-  if (alertType === 'near_expiry' || alertType === 'expired') {
-    const seen = new Set(acknowledged);
-    return current.every((key) => seen.has(key));
-  }
   if (alertType === 'low_stock') {
     return acknowledged[0] === 'out_of_stock' && current[0] === 'low';
   }
@@ -122,7 +131,7 @@ export const runAlertGeneration = async ({ now = new Date(), retentionMs = DEFAU
     Alert.find({ isCurrent: true }),
   ]);
 
-  const currentByPair = new Map(currentAlerts.map((a) => [pairKey(a.medicineId, a.alertType), a]));
+  const currentByKey = new Map(currentAlerts.map((a) => [alertKey(a.medicineId, a.alertType, a.batchId), a]));
   const holding = new Set();
   const created = [];
   let updated = 0;
@@ -130,9 +139,9 @@ export const runAlertGeneration = async ({ now = new Date(), retentionMs = DEFAU
 
   for (const medicine of medicines) {
     for (const condition of evaluateMedicine(medicine, now)) {
-      const key = pairKey(medicine._id, condition.alertType);
+      const key = alertKey(medicine._id, condition.alertType, condition.batchId);
       holding.add(key);
-      const existing = currentByPair.get(key);
+      const existing = currentByKey.get(key);
 
       if (existing && !existing.isResolved) {
         // Still open: keep one alert and refresh it rather than raising a duplicate
@@ -146,7 +155,7 @@ export const runAlertGeneration = async ({ now = new Date(), retentionMs = DEFAU
             message: condition.message,
             severity: condition.severity,
             fingerprint: condition.fingerprint,
-            batches: condition.batches,
+            batch: condition.batch,
             medicineName: medicine.name,
           });
           if (changed) existing.lastChangedAt = now;
@@ -175,7 +184,8 @@ export const runAlertGeneration = async ({ now = new Date(), retentionMs = DEFAU
             message: condition.message,
             severity: condition.severity,
             fingerprint: condition.fingerprint,
-            batches: condition.batches,
+            batchId: condition.batchId,
+            batch: condition.batch,
             isCurrent: true,
             lastChangedAt: now,
             createdAt: now,
@@ -190,7 +200,7 @@ export const runAlertGeneration = async ({ now = new Date(), retentionMs = DEFAU
 
   // Conditions that no longer hold (or whose medicine was deleted) close their alert
   for (const alert of currentAlerts) {
-    if (holding.has(pairKey(alert.medicineId, alert.alertType))) continue;
+    if (holding.has(alertKey(alert.medicineId, alert.alertType, alert.batchId))) continue;
     alert.isCurrent = false;
     alert.clearedAt = now;
     if (!alert.isResolved) {

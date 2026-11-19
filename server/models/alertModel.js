@@ -4,9 +4,12 @@
  *
  * Alerts are created, updated and closed by `services/alertService.js`. Lifecycle:
  * - `isCurrent: true` marks the one alert that describes the ongoing situation for a
- *   (medicine, alertType) pair. A partial unique index enforces at most one.
+ *   (medicine, alertType, batchId). Expiry alerts (near_expiry, expired) are per batch;
+ *   low_stock and overstock are per medicine (batchId null). A partial unique index
+ *   enforces at most one current alert per key.
  * - A user resolving it (`resolvedBy`) acknowledges that situation: it stays current and
- *   stops new alerts until the situation changes (see `fingerprint`).
+ *   stops new alerts. A batch alert stays quiet until its condition clears and returns;
+ *   low_stock until it gets worse (low -> out of stock) or clears and returns.
  * - When the condition stops holding, the alert is closed (`isCurrent: false`, `clearedAt`);
  *   if nobody had resolved it, the system resolves it (`autoResolved: true`).
  * - When an acknowledged situation changes, the old alert is closed (`isCurrent: false`)
@@ -47,17 +50,21 @@ const alertSchema = new mongoose.Schema(
       enum: ['critical', 'warning', 'info'],
       default: 'warning',
     },
-    // What the alert is about, compared between runs to tell "same situation" from "changed":
-    // expiry alerts -> the affected batches ("<batchNumber>@<YYYY-MM-DD>"),
-    // low_stock -> ['low'] or ['out_of_stock'], overstock -> ['overstock']
+    // Compared between runs: expiry alerts -> [expiry day "YYYY-MM-DD"] (a change updates
+    // lastChangedAt), low_stock -> ['low'] or ['out_of_stock'], overstock -> ['overstock']
     fingerprint: {
       type: [String],
       default: [],
     },
-    // Snapshot of the affected batches (expiry alerts only), for display
-    batches: {
-      type: [alertBatchSchema],
-      default: [],
+    // The batch subdocument (_id within Medicine.batches) an expiry alert is about; null otherwise
+    batchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    // Snapshot of that batch for display, refreshed while the alert is open; null for stock alerts
+    batch: {
+      type: alertBatchSchema,
+      default: null,
     },
     // True while this alert describes the ongoing situation for its (medicine, alertType)
     isCurrent: {
@@ -105,10 +112,11 @@ const alertSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// At most one current alert per medicine and type, even if two processes generate at once
+// At most one current alert per medicine, type and batch (null for stock alerts),
+// even if two processes generate at once
 alertSchema.index(
-  { medicineId: 1, alertType: 1 },
-  { unique: true, partialFilterExpression: { isCurrent: true }, name: 'one_current_alert_per_medicine_type' }
+  { medicineId: 1, alertType: 1, batchId: 1 },
+  { unique: true, partialFilterExpression: { isCurrent: true }, name: 'one_current_alert_per_medicine_type_batch' }
 );
 alertSchema.index({ isResolved: 1, severity: 1 });
 
