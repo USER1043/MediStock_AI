@@ -339,10 +339,10 @@ describe('forecasting', () => {
     const id = res.body.recommendation._id;
     const endpoint = `/api/forecast/recommendations/${id}`;
 
-    await expectOneEntry(() => api().put(endpoint).send({ status: 'adjusted', optimalReorderQty: 40 }), {
+    await expectOneEntry(() => api().put(endpoint).send({ quantity: 40 }), {
       status: 200, action: 'RECOMMENDATION_UPDATED', module: 'Forecasting', endpoint, method: 'PUT',
     });
-    await expectOneEntry(() => api().put(endpoint).send({ status: 'approved', approvedQty: 40 }), {
+    await expectOneEntry(() => api().put(endpoint).send({ status: 'approved', quantity: 40 }), {
       status: 200, action: 'REORDER_APPROVED', module: 'Forecasting', endpoint, method: 'PUT',
     });
     expect((await PurchaseOrder.findById(id).lean()).order_status).toBe('Pending');

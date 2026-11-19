@@ -61,11 +61,11 @@ Base URL (local): `http://localhost:5000/api`
 |--------|------|------|-------------|
 | GET | `/` | any | List |
 | GET | `/stats` | any | Customer statistics |
-| GET | `/search` | any | Search by name or phone |
+| GET | `/search` | any | Search by name, phone or email (`?query=`, matched literally and case-insensitively) |
 | GET | `/:id` | any | One customer |
 | POST | `/` | owner, staff | Create (`phone` must be unique) |
-| PUT | `/:id` | owner, staff | Update |
-| DELETE | `/:id` | owner | Delete |
+| PUT | `/:id` | owner, staff | Update `name`, `phone`, `email`, `customerType`, `address`, `city` only (computed totals are ignored). `400` on a duplicate `phone` or invalid value. |
+| DELETE | `/:id` | owner | Delete. `409` if the customer has any bills. |
 
 ## Alerts — `/api/alerts`
 
@@ -107,9 +107,9 @@ The list endpoints and `/generate` also return `lastGeneratedAt` (this process's
 |--------|------|------|-------------|
 | POST | `/run` | owner | Run the forecast for every medicine, validate the new `AI_Draft` POs, then replace the old drafts with them (one transaction on a replica set; a failed run keeps the old drafts) |
 | POST | `/retrain` | owner | Same as `/run`, logged as `MODEL_RETRAINED` (called after an owner's Excel import) |
-| GET | `/recommendations` | any | Forecast-originated POs mapped to `{predictedDemand, optimalReorderQty, priority, status}` |
+| GET | `/recommendations` | any | Forecast-originated POs mapped to `{predictedDemand, optimalReorderQty, priority, status, orderStatus}`. `status` is a review label: `new` (`AI_Draft`), `adjusted` (`Adjusted`), `rejected` (`Cancelled`), or `approved` (any later PO stage) |
 | POST | `/recommendations` | owner, staff | Manual recommendation. Always creates an `AI_Draft` (the body can't set the status) |
-| PUT | `/recommendations/:id` | owner, staff; owner for `approved` / `rejected` | `{status: approved\|rejected\|adjusted\|pending, approvedQty?, optimalReorderQty?, priority?, restockingDate?}`. Staff may adjust (`adjusted`, `pending` or no status); `approved` (→ `Pending`, sets `approved_by`) and `rejected` (→ `Cancelled`) are owner-only (403 `OWNER_ONLY`). Only drafts (`AI_Draft`, `Adjusted`) can be changed: any other PO is 409 `NOT_A_DRAFT`, an unknown id is 404 |
+| PUT | `/recommendations/:id` | owner, staff; owner for `approved` / `rejected` | `{status?: approved\|rejected, quantity?, priority?, restockingDate?}`. No status: the edits are applied and the draft becomes `Adjusted` (staff or owner). `approved` → `Pending` (sets `approved_by`; edits in the same request are applied) and `rejected` → `Cancelled` (no edits allowed) are owner-only (403 `OWNER_ONLY`). `quantity` must be a positive whole number; any other status, an unknown priority or date, or an empty body is 400 `INVALID_INPUT`. Only drafts (`AI_Draft`, `Adjusted`) can be changed, in one atomic conditional update: any other PO, including a draft that another request approved, rejected or deleted first, is 409 `NOT_A_DRAFT`; an unknown id is 404 |
 | DELETE | `/recommendations/:id` | owner | Delete a draft (`AI_Draft` or `Adjusted`). 403 for staff, 409 `NOT_A_DRAFT` for any other PO, 404 for an unknown id |
 | GET | `/parameters` | any | Forecast parameters (creates defaults if missing) |
 | POST | `/parameters` | owner | Save parameters |

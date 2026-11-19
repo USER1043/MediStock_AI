@@ -104,7 +104,7 @@ describe('staff: adjust only', () => {
   test('staff can adjust the quantity, priority and date of a draft', async () => {
     const po = await addPo();
 
-    const res = await as(staffToken).put(po._id, { status: 'adjusted', optimalReorderQty: 40, priority: 'low' });
+    const res = await as(staffToken).put(po._id, { quantity: 40, priority: 'low' });
 
     expect(res.status).toBe(200);
     const after = await stored(po);
@@ -116,7 +116,7 @@ describe('staff: adjust only', () => {
   test('staff can re-adjust an adjusted draft, and change its date and priority without a status', async () => {
     const po = await addPo('Adjusted');
 
-    const readjust = await as(staffToken).put(po._id, { status: 'adjusted', optimalReorderQty: 12 });
+    const readjust = await as(staffToken).put(po._id, { quantity: 12 });
     const reschedule = await as(staffToken).put(po._id, { restockingDate: '2030-01-01', priority: 'medium' });
 
     expect(readjust.status).toBe(200);
@@ -147,7 +147,7 @@ describe('staff: adjust only', () => {
     const po = await addPo();
     const before = await stored(po);
 
-    const res = await as(staffToken).put(po._id, { status, approvedQty: 999 });
+    const res = await as(staffToken).put(po._id, { status });
 
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ success: false, errorCode: 'OWNER_ONLY' });
@@ -181,7 +181,7 @@ describe('owner decides', () => {
   test('approving a draft moves it to Pending, records the approver and is audited as REORDER_APPROVED', async () => {
     const po = await addPo();
 
-    const res = await as(ownerToken).put(po._id, { status: 'approved', approvedQty: 90 });
+    const res = await as(ownerToken).put(po._id, { status: 'approved', quantity: 90 });
 
     expect(res.status).toBe(200);
     const after = await stored(po);
@@ -226,7 +226,7 @@ describe('only forecast drafts can be changed', () => {
       const po = await addPo(order_status);
       const before = await stored(po);
 
-      const put = await as(ownerToken).put(po._id, { status: 'adjusted', optimalReorderQty: 1 });
+      const put = await as(ownerToken).put(po._id, { quantity: 1 });
       const approve = await as(ownerToken).put(po._id, { status: 'approved' });
       const del = await as(ownerToken).del(po._id);
 
@@ -241,7 +241,7 @@ describe('only forecast drafts can be changed', () => {
   test('staff also get 409 when adjusting a non-draft PO', async () => {
     const po = await addPo('Ordered');
     const before = await stored(po);
-    const res = await as(staffToken).put(po._id, { status: 'adjusted', optimalReorderQty: 1 });
+    const res = await as(staffToken).put(po._id, { quantity: 1 });
     expect(res.status).toBe(409);
     expect(await stored(po)).toEqual(before);
   });
@@ -251,7 +251,7 @@ describe('only forecast drafts can be changed', () => {
     for (const id of [missing, 'not-an-id']) {
       expect((await as(ownerToken).put(id, { status: 'approved' })).status).toBe(404);
       expect((await as(ownerToken).del(id)).status).toBe(404);
-      expect((await as(staffToken).put(id, { status: 'adjusted' })).status).toBe(404);
+      expect((await as(staffToken).put(id, { quantity: 1 })).status).toBe(404);
     }
   });
 

@@ -62,7 +62,7 @@ export default function ForecastReview() {
   const [trendData, setTrendData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState({ priority: "", status: "pending" });
+  const [filters, setFilters] = useState({ priority: "", status: "to_review" });
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
@@ -110,13 +110,10 @@ export default function ForecastReview() {
     }
   };
 
-  // Updates approval status for a recommendation.
-  const handleStatusUpdate = async (id, status, approvedQty) => {
+  // Approves or rejects a recommendation (owner only).
+  const handleStatusUpdate = async (id, status) => {
     try {
-      await axiosInstance.put(`/forecast/recommendations/${id}`, {
-        status,
-        approvedQty,
-      });
+      await axiosInstance.put(`/forecast/recommendations/${id}`, { status });
       toast.success(`Recommendation ${status}`);
       fetchData();
     } catch (error) {
@@ -151,8 +148,9 @@ export default function ForecastReview() {
         await axiosInstance.put(
           `/forecast/recommendations/${formData._id}`,
           {
-            ...formData,
-            status: "adjusted",
+            quantity: formData.optimalReorderQty,
+            priority: formData.priority,
+            restockingDate: formData.restockingDate,
           },
         );
         toast.success("Recommendation adjusted");
@@ -200,9 +198,12 @@ export default function ForecastReview() {
       !filters.priority ||
       rec.priority?.toLowerCase() === filters.priority.toLowerCase();
 
+    // "to_review" = everything still waiting for the owner's decision: new and adjusted drafts
     const matchesStatus =
       !filters.status ||
-      rec.status?.toLowerCase() === filters.status.toLowerCase();
+      (filters.status === "to_review"
+        ? rec.status === "new" || rec.status === "adjusted"
+        : rec.status === filters.status);
 
     return matchesSearch && matchesPriority && matchesStatus;
   });
@@ -325,11 +326,12 @@ export default function ForecastReview() {
                   setPage(0);
                 }}
               >
-                <MenuItem value="">All Statuses</MenuItem>
-                <MenuItem value="pending">Pending</MenuItem>
-                <MenuItem value="approved">Approved</MenuItem>
+                <MenuItem value="to_review">To review (new + adjusted)</MenuItem>
+                <MenuItem value="new">New</MenuItem>
                 <MenuItem value="adjusted">Adjusted</MenuItem>
+                <MenuItem value="approved">Approved</MenuItem>
                 <MenuItem value="rejected">Rejected</MenuItem>
+                <MenuItem value="">All</MenuItem>
               </Select>
             </FormControl>
           </Box>
@@ -396,7 +398,7 @@ export default function ForecastReview() {
                         </TableCell>
                         <TableCell>
                           <Chip
-                            label={(row.status || "pending").toUpperCase()}
+                            label={row.status.toUpperCase()}
                             variant="outlined"
                             color={
                               row.status === "approved"
@@ -413,17 +415,13 @@ export default function ForecastReview() {
                         </TableCell>
                         <TableCell align="right">
                           {/* Only drafts under review can be changed; approved and rejected rows are history */}
-                          {row.status === "pending" || row.status === "adjusted" ? (
+                          {row.status === "new" || row.status === "adjusted" ? (
                             <>
                               {isOwner && (
                                 <IconButton
                                   color="success"
                                   onClick={() =>
-                                    handleStatusUpdate(
-                                      row._id,
-                                      "approved",
-                                      row.optimalReorderQty,
-                                    )
+                                    handleStatusUpdate(row._id, "approved")
                                   }
                                   title="Approve Recommendation"
                                 >
@@ -519,6 +517,11 @@ export default function ForecastReview() {
                 type="number"
                 fullWidth
                 value={formData.optimalReorderQty}
+                inputProps={{ min: 1, step: 1 }}
+                error={!(formData.optimalReorderQty >= 1)}
+                helperText={
+                  formData.optimalReorderQty >= 1 ? " " : "Enter a quantity of at least 1"
+                }
                 onChange={(e) =>
                   setFormData((f) => ({
                     ...f,
@@ -559,7 +562,11 @@ export default function ForecastReview() {
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
           <Button onClick={() => setIsModalOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleModalSubmit}>
+          <Button
+            variant="contained"
+            onClick={handleModalSubmit}
+            disabled={!(formData.optimalReorderQty >= 1)}
+          >
             {modalType === "add" ? "Create" : "Save Changes"}
           </Button>
         </DialogActions>
