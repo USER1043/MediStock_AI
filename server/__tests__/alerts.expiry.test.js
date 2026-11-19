@@ -159,9 +159,10 @@ describe('evaluateMedicine stock conditions', () => {
 
 describe('acknowledgementCovers', () => {
   it.each([
-    // a batch alert stays acknowledged while its condition holds; clearing closes it instead
+    // a batch alert stays acknowledged while its condition and expiry day hold; clearing closes it instead
     ['near_expiry', ['2026-11-20'], ['2026-11-20'], true],
-    ['near_expiry', ['2026-11-20'], ['2026-11-22'], true], // expiry edited, still near expiry
+    ['near_expiry', ['2026-11-20'], ['2026-11-22'], false], // expiry edited, still near expiry: new situation
+    ['expired', ['2026-11-04'], ['2026-11-01'], false], // expiry corrected to another past date
     ['expired', ['2026-11-04'], ['2026-11-04'], true],
     ['low_stock', ['low'], ['low'], true],
     ['low_stock', ['low'], ['out_of_stock'], false], // got worse

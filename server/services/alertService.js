@@ -46,8 +46,6 @@ const idOf = (value) => (value ? value.toString() : '');
 // Identifies "the same alert" across runs: one per medicine and type, and per batch for expiry alerts
 const alertKey = (medicineId, alertType, batchId) => `${medicineId}:${alertType}:${idOf(batchId)}`;
 
-export const BATCH_ALERT_TYPES = ['near_expiry', 'expired'];
-
 const batchCondition = (alertType, batch) => {
   const where = `(rack ${batch.rackNumber || 'N/A'}, qty ${batch.quantity})`;
   return {
@@ -55,7 +53,7 @@ const batchCondition = (alertType, batch) => {
     severity: alertType === 'expired' ? 'critical' : 'warning',
     batchId: batch._id ?? null,
     batch: batchSnapshot(batch),
-    // The expiry day: an edit within the same condition updates the alert (lastChangedAt)
+    // The expiry day: an edit updates an open alert (lastChangedAt) and re-raises an acknowledged one
     fingerprint: [dayOf(batch.expiryDate)],
     message:
       alertType === 'expired'
@@ -107,13 +105,13 @@ export const evaluateMedicine = (medicine, now = new Date()) => {
 
 /**
  * Whether an acknowledged (user-resolved) alert still covers the current situation.
- * Batch alerts (near_expiry, expired): yes for as long as the condition keeps holding; it comes
- * back only after it clears and returns (that closes the acknowledged alert, so a new one is raised).
+ * Batch alerts (near_expiry, expired): yes while the batch keeps the same expiry day (the
+ * fingerprint), so sales and rack moves stay silent; an expiry edit is a new situation and
+ * re-raises. Clearing and returning also re-raises (clearing closes the acknowledged alert).
  * Low stock: same level, or "out of stock" was acknowledged and stock is now merely low.
  * Overstock: presence only.
  */
 export const acknowledgementCovers = (alertType, acknowledged = [], current = []) => {
-  if (BATCH_ALERT_TYPES.includes(alertType)) return true;
   if (sameList(acknowledged, current)) return true;
   if (alertType === 'low_stock') {
     return acknowledged[0] === 'out_of_stock' && current[0] === 'low';
@@ -170,7 +168,8 @@ export const runAlertGeneration = async ({ now = new Date(), retentionMs = DEFAU
       }
 
       if (existing) {
-        // Acknowledged, but the situation changed: retire it and raise a new alert
+        // Acknowledged, but the situation changed: retire it as history (keeping the snapshot
+        // that was acknowledged) and raise a new alert
         existing.isCurrent = false;
         await existing.save();
       }

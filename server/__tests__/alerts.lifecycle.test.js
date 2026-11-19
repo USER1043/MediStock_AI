@@ -16,7 +16,7 @@ process.env.JWT_SECRET = 'alerts-lifecycle-test-secret';
 
 const { createAlertService, alertService, markAlertsStaleOnWrite, DEFAULT_STALE_AFTER_MS, DEFAULT_RETENTION_MS } =
   await import('../services/alertService.js');
-const { resolveAlert } = await import('../controllers/alertController.js');
+const { resolveAlert, getCriticalAlerts } = await import('../controllers/alertController.js');
 const { getDashboardAnalytics } = await import('../controllers/reportController.js');
 const { auditLogger } = await import('../middleware/auditLogger.js');
 const { default: alertRoutes } = await import('../routes/alertRoutes.js');
@@ -422,6 +422,67 @@ describe('resolving acknowledges until the situation changes', () => {
     expect(expired).toHaveLength(1);
     expect(expired[0]).toMatchObject({ severity: 'critical', isResolved: false, isCurrent: true });
     expect(expired[0].message).toMatch(/^Batch T-1 expired on .* and is still in stock \(rack R1, qty 5\)$/);
+  });
+
+  test('an expiry edit on an acknowledged near-expiry batch closes it and raises a new alert with the new date', async () => {
+    const med = await addMedicine('Redated Med', [batch('RD-1', 3, 5), batch('OK-1', 200, 50)]);
+    await service.generate();
+    const [acknowledged] = await batchAlerts(med._id, 'RD-1', 'near_expiry');
+    await userResolve(acknowledged._id);
+
+    await editBatches(med._id, { 'RD-1': { expiryDate: daysFromNow(6) } }); // still inside the window
+    await service.generate();
+
+    const alerts = await batchAlerts(med._id, 'RD-1', 'near_expiry');
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toMatchObject({ _id: acknowledged._id, isResolved: true, isCurrent: false, resolvedByName: 'owner' });
+    expect(new Date(alerts[0].batch.expiryDate)).toEqual(new Date(acknowledged.batch.expiryDate)); // what was acknowledged
+    expect(alerts[0].message).toBe(acknowledged.message);
+    expect(alerts[1]).toMatchObject({ isResolved: false, isCurrent: true, fingerprint: [daysFromNow(6).toISOString().slice(0, 10)] });
+    expect(new Date(alerts[1].batch.expiryDate)).toEqual(daysFromNow(6));
+  });
+
+  test('correcting an acknowledged expired batch to another past date raises a new critical alert', async () => {
+    const med = await addMedicine('Corrected Med', [batch('CR-1', -10, 5), batch('OK-1', 200, 50)]);
+    await service.generate();
+    const [acknowledged] = await batchAlerts(med._id, 'CR-1', 'expired');
+    await userResolve(acknowledged._id);
+
+    const critical = async () => {
+      const res = {};
+      res.status = jest.fn(() => res);
+      res.json = jest.fn((body) => { res.body = body; return res; });
+      await getCriticalAlerts({}, res);
+      return res.body.count;
+    };
+    expect(await critical()).toBe(0);
+
+    await editBatches(med._id, { 'CR-1': { expiryDate: daysFromNow(-4) } });
+    alertService.markStale(); // what the inventory route's stale-marking does
+    await service.generate();
+
+    const alerts = await batchAlerts(med._id, 'CR-1', 'expired');
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toMatchObject({ isResolved: true, isCurrent: false });
+    expect(new Date(alerts[0].batch.expiryDate)).toEqual(daysFromNow(-10));
+    expect(alerts[1]).toMatchObject({ severity: 'critical', isResolved: false, isCurrent: true });
+    expect(alerts[1].message).toMatch(/^Batch CR-1 expired on /);
+    expect(await critical()).toBe(1); // the badge / dashboard count
+  });
+
+  test('a quantity or rack change on an acknowledged batch stays silent and leaves the record alone', async () => {
+    const med = await addMedicine('Quiet Med', [batch('QT-1', 3, 9, 'A1'), batch('OK-1', 200, 50)]);
+    await service.generate();
+    const [acknowledged] = await batchAlerts(med._id, 'QT-1', 'near_expiry');
+    await userResolve(acknowledged._id);
+    const before = await Alert.findById(acknowledged._id).lean();
+
+    await editBatches(med._id, { 'QT-1': { quantity: 2, rackNumber: 'Z9' } });
+    await service.generate();
+
+    const alerts = await batchAlerts(med._id, 'QT-1', 'near_expiry');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toEqual(before);
   });
 
   test('an acknowledged batch that hits zero and is restocked while still expiring raises a new alert', async () => {

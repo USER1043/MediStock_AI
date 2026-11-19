@@ -8,8 +8,9 @@
  *   low_stock and overstock are per medicine (batchId null). A partial unique index
  *   enforces at most one current alert per key.
  * - A user resolving it (`resolvedBy`) acknowledges that situation: it stays current and
- *   stops new alerts. A batch alert stays quiet until its condition clears and returns;
- *   low_stock until it gets worse (low -> out of stock) or clears and returns.
+ *   stops new alerts. A batch alert stays quiet until its expiry date is edited or its
+ *   condition clears and returns; low_stock until it gets worse (low -> out of stock) or
+ *   clears and returns.
  * - When the condition stops holding, the alert is closed (`isCurrent: false`, `clearedAt`);
  *   if nobody had resolved it, the system resolves it (`autoResolved: true`).
  * - When an acknowledged situation changes, the old alert is closed (`isCurrent: false`)
@@ -50,8 +51,8 @@ const alertSchema = new mongoose.Schema(
       enum: ['critical', 'warning', 'info'],
       default: 'warning',
     },
-    // Compared between runs: expiry alerts -> [expiry day "YYYY-MM-DD"] (a change updates
-    // lastChangedAt), low_stock -> ['low'] or ['out_of_stock'], overstock -> ['overstock']
+    // Compared between runs: expiry alerts -> [expiry day "YYYY-MM-DD"] (a change updates an
+    // open alert's lastChangedAt, and re-raises an acknowledged one), low_stock -> ['low'] or ['out_of_stock'], overstock -> ['overstock']
     fingerprint: {
       type: [String],
       default: [],

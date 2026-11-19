@@ -255,8 +255,8 @@ stateDiagram-v2
     Open --> Open: details or fingerprint change (updated in place, no duplicate)
     Open --> AutoResolved: condition stops holding (autoResolved, clearedAt)
     Open --> Acknowledged: user resolves (resolvedBy, resolvedAt)
-    Acknowledged --> Acknowledged: condition keeps holding (stays quiet)
-    Acknowledged --> Superseded: low stock gets worse (new Open alert raised)
+    Acknowledged --> Acknowledged: same condition, same expiry day / level (stays quiet)
+    Acknowledged --> Superseded: expiry date edited, or low stock gets worse (new Open alert raised)
     Acknowledged --> Cleared: condition stops holding (clearedAt)
     AutoResolved --> [*]
     Superseded --> [*]
@@ -266,7 +266,9 @@ stateDiagram-v2
 - **Open, condition still holds:** the alert is updated in place (message, batch snapshot, severity). A quantity or rack change only refreshes the message. A fingerprint change (an expiry edit that keeps the batch in the same condition, low → out of stock) also moves `lastChangedAt`.
 - **Condition no longer holds** (the batch sold out, was removed or its expiry was edited out of the window; restocked above the threshold; no longer overstocked; medicine deleted): the alert stops being current and gets `clearedAt`. If nobody had resolved it, the system resolves it (`autoResolved: true`, `resolvedAt`). Other batches' alerts are unaffected.
 - **Resolve = acknowledge.** A user-resolved alert stays current and keeps new alerts away:
-  - **Batch alerts** stay quiet for as long as that batch stays in the same condition (sales, rack moves and expiry edits within the window don't re-raise it; the acknowledged record is left as it was). It comes back as a **new** alert only after the condition clears and returns, e.g. the batch hits zero and is restocked while still expiring, or its expiry is edited out of the window and back in.
+  - **Batch alerts** stay quiet while that batch stays in the same condition with the same expiry day. Sales and rack moves don't re-raise it (otherwise every sale would), and the acknowledged record is left as it was.
+  - **An expiry date edit** on an acknowledged batch that is still in the same condition (still near expiry, or corrected to another past date) is a new situation: the acknowledged alert is closed as history (`isCurrent: false`), keeping the snapshot and message with the expiry that was acknowledged, and a new open alert is raised with the new date. (On an open alert the same edit just updates it in place.)
+  - A batch alert also comes back as a **new** alert after its condition clears and returns, e.g. the batch hits zero and is restocked while still expiring, or its expiry is edited out of the window and back in.
   - **Near expiry → expired** for the same batch is a different alert type: the near_expiry alert clears and a new critical `expired` alert is raised, whether or not the near_expiry one was acknowledged.
   - **Low stock** stays quiet at the same level, or when "out of stock" was acknowledged and stock is now merely low. If "low" becomes "out of stock", the acknowledged alert is retired (`isCurrent: false`) and a new one is raised. **Overstock** stays quiet while it holds.
   - In every case, if the condition clears and later returns, that is a new alert, because the acknowledged one stopped being current when it cleared.
