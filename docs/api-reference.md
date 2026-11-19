@@ -105,12 +105,12 @@ The list endpoints and `/generate` also return `lastGeneratedAt` (this process's
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/run` | owner | Delete existing AI drafts, run the forecast for every medicine, create new `AI_Draft` POs |
+| POST | `/run` | owner | Run the forecast for every medicine, validate the new `AI_Draft` POs, then replace the old drafts with them (one transaction on a replica set; a failed run keeps the old drafts) |
 | POST | `/retrain` | owner | Same as `/run`, logged as `MODEL_RETRAINED` (called after an owner's Excel import) |
 | GET | `/recommendations` | any | Forecast-originated POs mapped to `{predictedDemand, optimalReorderQty, priority, status}` |
-| POST | `/recommendations` | any | Manual recommendation (creates an `AI_Draft`) |
-| PUT | `/recommendations/:id` | any | `{status: approved\|rejected\|adjusted\|pending, approvedQty?, optimalReorderQty?, priority?, restockingDate?}` |
-| DELETE | `/recommendations/:id` | any | Delete a recommendation |
+| POST | `/recommendations` | owner, staff | Manual recommendation. Always creates an `AI_Draft` (the body can't set the status) |
+| PUT | `/recommendations/:id` | owner, staff; owner for `approved` / `rejected` | `{status: approved\|rejected\|adjusted\|pending, approvedQty?, optimalReorderQty?, priority?, restockingDate?}`. Staff may adjust (`adjusted`, `pending` or no status); `approved` (→ `Pending`, sets `approved_by`) and `rejected` (→ `Cancelled`) are owner-only (403 `OWNER_ONLY`). Only drafts (`AI_Draft`, `Adjusted`) can be changed: any other PO is 409 `NOT_A_DRAFT`, an unknown id is 404 |
+| DELETE | `/recommendations/:id` | owner | Delete a draft (`AI_Draft` or `Adjusted`). 403 for staff, 409 `NOT_A_DRAFT` for any other PO, 404 for an unknown id |
 | GET | `/parameters` | any | Forecast parameters (creates defaults if missing) |
 | POST | `/parameters` | owner | Save parameters |
 | GET | `/trend` | any | 14-day actual vs predicted series |

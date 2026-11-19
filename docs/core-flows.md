@@ -123,9 +123,9 @@ sequenceDiagram
     O->>FR: open Forecast Review
     FR->>API: GET /api/forecast/recommendations
     API-->>FR: drafts mapped to {predictedDemand, optimalReorderQty, priority, status}
-    O->>FR: Approve / adjust qty / reject
+    O->>FR: Adjust qty (staff or owner); approve / reject / delete (owner only)
     FR->>API: PUT /api/forecast/recommendations/:id {status, qty, priority}
-    API->>DB: AI_Draft → Pending / Adjusted / Cancelled
+    API->>DB: AI_Draft or Adjusted → Pending / Adjusted / Cancelled (other POs: 409)
 ```
 
 Details of the model and reorder formula: [forecasting.md](forecasting.md).
@@ -139,7 +139,7 @@ There is also a simpler, rule-based path: `POST /api/suppliers/reorder/generate`
 | Fewer than 7 days of sales history | Skips the LSTM; estimates demand from `reorderLevel / 30` per day |
 | 7 days of history exactly | LSTM needs `windowSize + 1` points, so it falls back to a moving average |
 | No supplier in the database | That medicine is skipped (no draft) |
-| Forecast re-run | **All** existing `AI_Draft` POs are deleted first, including ones created manually |
+| Forecast re-run | The new drafts are validated first, then replace **all** existing `AI_Draft` POs, including manually created ones (in one transaction on a replica set; if the run fails, the old drafts stay). `Adjusted` drafts are not replaced |
 | Excel import finishes | For an owner, the client fires `POST /api/forecast/retrain` ("continuous learning"), which runs the full forecast again. For staff it doesn't (retrain is owner-only); the result shows that forecasts update when an owner runs them |
 
 ---
@@ -149,10 +149,10 @@ There is also a simpler, rule-based path: `POST /api/suppliers/reorder/generate`
 ```mermaid
 stateDiagram-v2
     [*] --> AI_Draft: forecast run /<br/>reorder generate /<br/>manual recommendation
-    AI_Draft --> Pending: approve (forecast review)<br/>or createPurchaseOrder
-    AI_Draft --> Adjusted: quantity adjusted
-    Adjusted --> Pending: approve
-    AI_Draft --> Cancelled: reject
+    AI_Draft --> Pending: owner approves (forecast review)<br/>or createPurchaseOrder
+    AI_Draft --> Adjusted: quantity adjusted (staff or owner)
+    Adjusted --> Pending: owner approves
+    AI_Draft --> Cancelled: owner rejects
     Pending --> Ordered
     Ordered --> Shipped
     Shipped --> Received

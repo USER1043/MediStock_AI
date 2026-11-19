@@ -347,8 +347,11 @@ describe('forecasting', () => {
     });
     expect((await PurchaseOrder.findById(id).lean()).order_status).toBe('Pending');
 
-    await expectOneEntry(() => api().delete(endpoint), {
-      status: 200, action: 'RECOMMENDATION_DELETED', module: 'Forecasting', endpoint, method: 'DELETE',
+    // Only drafts can be deleted, so delete a second, still-unreviewed one (the approved PO is now Pending)
+    const second = await api().post('/api/forecast/recommendations').send({ medicineId: med._id.toString(), optimalReorderQty: 5 });
+    const draftEndpoint = `/api/forecast/recommendations/${second.body.recommendation._id}`;
+    await expectOneEntry(() => api().delete(draftEndpoint), {
+      status: 200, action: 'RECOMMENDATION_DELETED', module: 'Forecasting', endpoint: draftEndpoint, method: 'DELETE',
     });
   });
 

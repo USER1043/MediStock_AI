@@ -30,8 +30,8 @@ If you only have 15 minutes: read **architecture.md** and **core-flows.md**.
 
 | Persona | Logs in? | What they do |
 |---------|----------|--------------|
-| **Owner** (shown in UI as *Admin*) | Yes — role `owner` | Everything: financial reports, user management, forecasting parameters, approving purchase orders, audit log |
-| **Staff** (shown as *Operational Staff*) | Yes — role `staff` | Day-to-day operations: billing, inventory updates, customers, Excel import, reviewing reorder drafts, chatbot |
+| **Owner** (shown in UI as *Admin*) | Yes — role `owner` | Everything: financial reports, user management, forecasting parameters, approving forecast drafts and purchase orders, audit log |
+| **Staff** (shown as *Operational Staff*) | Yes — role `staff` | Day-to-day operations: billing, inventory updates, customers, Excel import, reviewing and adjusting reorder drafts (the owner approves them), chatbot |
 | **Customer** | No | Exists only as a record (`Customer` collection). Receives bill notifications via email / WhatsApp when contact details are on file |
 
 Only two roles exist in code (`userModel.js`: `enum: ['owner', 'staff']`). There is no customer-facing login.
