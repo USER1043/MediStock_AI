@@ -2,9 +2,20 @@
  * @file Customer management page for viewing customer directory and adding new profiles.
  * @module pages/Customers
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import axiosInstance from '../utils/axiosConfig';
 import { FaSearch, FaTimes, FaPlus, FaUserPlus } from 'react-icons/fa';
+
+const EMPTY_FORM = {
+  name: '',
+  phone: '',
+  email: '',
+  customerType: 'regular',
+  address: '',
+  city: '',
+};
+
+const CUSTOMER_TYPE_LABELS = { regular: 'Regular', walking: 'Walk-in' };
 
 const Customers = () => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -12,24 +23,13 @@ const Customers = () => {
   const [loading, setLoading] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    phone: '',
-    email: '',
-    customerType: 'regular',
-    address: '',
-    city: '',
-  });
-
-  const token = localStorage.getItem('medistock_token');
-  const headers = { Authorization: `Bearer ${token}` };
+  const [newCustomer, setNewCustomer] = useState(EMPTY_FORM);
 
   const fetchCustomers = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await axiosInstance.get(`/customers`);
-      const apiData = res.data.customers || [];
-      setCustomers(apiData);
+      const res = await axiosInstance.get('/customers');
+      setCustomers(res.data.customers || []);
     } catch (err) {
       console.error('Failed to fetch customers:', err);
       setCustomers([]);
@@ -38,59 +38,28 @@ const Customers = () => {
     }
   }, []);
 
-  // Fetch all customers initially
   useEffect(() => {
     fetchCustomers();
   }, [fetchCustomers]);
 
-  // Search handler with API fallback
-  const handleSearch = async (query) => {
-    setSearchQuery(query);
-
-    if (!query.trim()) {
-      fetchCustomers();
-      return;
-    }
-
-    // Try API search
-    try {
-      setLoading(true);
-      const res = await axiosInstance.get(`/customers/search`, {
-        params: { query },
-      });
-      setCustomers(res.data.customers || []);
-    } catch (err) {
-      console.error('Search failed:', err);
-      setCustomers([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClearSearch = () => {
-    setSearchQuery('');
-    handleSearch('');
-  };
-
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
+  // Client-side search over the loaded directory (name, phone or email).
+  const filteredCustomers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return customers;
+    return customers.filter((customer) =>
+      [customer.name, customer.phone, customer.email].some((field) =>
+        (field || '').toLowerCase().includes(query)
+      )
+    );
+  }, [customers, searchQuery]);
 
   const handleAddCustomer = async (e) => {
     e.preventDefault();
     try {
       setAdding(true);
-      await axiosInstance.post('/customers', formData);
+      await axiosInstance.post('/customers', newCustomer);
       setIsAddModalOpen(false);
-      setFormData({
-        name: '',
-        phone: '',
-        email: '',
-        customerType: 'regular',
-        address: '',
-        city: '',
-      });
+      setNewCustomer(EMPTY_FORM);
       fetchCustomers();
     } catch (err) {
       console.error('Failed to create customer:', err);
@@ -114,8 +83,18 @@ const Customers = () => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by customer name, phone, or email..."
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm"
+              className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <FaTimes />
+              </button>
+            )}
           </div>
           <button
             onClick={() => setIsAddModalOpen(true)}
@@ -150,7 +129,7 @@ const Customers = () => {
                             : 'bg-gray-100 text-gray-800'
                           }`}
                       >
-                        {customer.customerType}
+                        {CUSTOMER_TYPE_LABELS[customer.customerType] || customer.customerType || 'Unknown'}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm">{customer.email}</td>
@@ -160,7 +139,11 @@ const Customers = () => {
               ) : (
                 <tr>
                   <td colSpan="5" className="px-6 py-8 text-center text-gray-500">
-                    {loading ? 'Searching...' : 'No customers found matching your search'}
+                    {loading
+                      ? 'Loading customers...'
+                      : searchQuery.trim()
+                        ? 'No customers found matching your search'
+                        : 'No customers yet'}
                   </td>
                 </tr>
               )}
@@ -229,7 +212,7 @@ const Customers = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="regular">Regular</option>
-                  <option value="walk-in">Walk-in</option>
+                  <option value="walking">Walk-in</option>
                 </select>
               </div>
 
