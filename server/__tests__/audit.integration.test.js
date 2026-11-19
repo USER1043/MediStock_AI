@@ -30,7 +30,7 @@ jest.unstable_mockModule('axios', () => ({
 process.env.JWT_SECRET = 'audit-integration-test-secret';
 
 const { default: log } = await import('../utils/logger.js');
-const { auditLogger } = await import('../middleware/auditLogger.js');
+const { auditLogger, createAuditEntry } = await import('../middleware/auditLogger.js');
 const { mountApiRouters } = await import('../routes/index.js');
 const { AuditLog } = await import('../models/auditLogModel.js');
 const { User } = await import('../models/userModel.js');
@@ -141,18 +141,36 @@ beforeEach(async () => {
 describe('users', () => {
   test('register, edit and delete are USER_CREATED / USER_UPDATED / USER_DELETED, with passwords redacted', async () => {
     const { res, entry } = await expectOneEntry(
-      () => api().post('/api/auth/register').send({ username: 'nurse', email: 'nurse@test.local', password: 'Nurse#2024', role: 'staff' }),
+      () => api().post('/api/auth/register').send({
+        username: 'nurse', email: 'nurse@test.local', password: 'Nurse#2024', confirmPassword: 'Nurse#2024', role: 'staff',
+      }),
       { status: 201, action: 'USER_CREATED', module: 'UserManagement', endpoint: '/api/auth/register', method: 'POST' }
     );
-    expect(entry.details.body).toMatchObject({ username: 'nurse', password: '[REDACTED]' });
+    expect(entry.details.body).toEqual({
+      username: 'nurse', email: 'nurse@test.local', password: '[REDACTED]', confirmPassword: '[REDACTED]', role: 'staff',
+    });
     expect(JSON.stringify(entry)).not.toContain('Nurse#2024');
     const id = res.body.user?._id || res.body.user?.id || (await User.findOne({ username: 'nurse' }))._id.toString();
 
     const updated = await expectOneEntry(
-      () => api().put(`/api/auth/users/${id}`).send({ email: 'nurse2@test.local', password: 'Nurse#2025' }),
+      () => api().put(`/api/auth/users/${id}`).send({
+        email: 'nurse2@test.local',
+        password: 'Nurse#2025',
+        currentPassword: 'Nurse#2024',
+        newPassword: 'Nurse#2025',
+        profile: { keyword: 'night shift', devices: [{ name: 'tablet', refreshToken: 'rt-secret-value' }] },
+      }),
       { status: 200, action: 'USER_UPDATED', module: 'UserManagement', endpoint: `/api/auth/users/${id}`, method: 'PUT' }
     );
-    expect(updated.entry.details.body.password).toBe('[REDACTED]');
+    expect(updated.entry.details.body).toEqual({
+      email: 'nurse2@test.local',
+      password: '[REDACTED]',
+      currentPassword: '[REDACTED]',
+      newPassword: '[REDACTED]',
+      profile: { keyword: 'night shift', devices: [{ name: 'tablet', refreshToken: '[REDACTED]' }] },
+    });
+    expect(JSON.stringify(updated.entry)).not.toContain('rt-secret-value');
+    expect(JSON.stringify(updated.entry)).not.toContain('Nurse#2024');
     expect(updated.entry.details.params).toEqual({ id });
     expect(JSON.stringify(updated.entry)).not.toContain('Nurse#2025');
 
@@ -179,6 +197,18 @@ describe('users', () => {
     const logged = await entries();
     expect(logged.map((e) => e.action)).toEqual(['USER_LOGIN']);
     expect(logged[0]).toMatchObject({ module: 'System', endpoint: '/api/auth/login', username: 'owner' });
+    expect(logged[0].details).toEqual({ role: 'owner' });
+    expect(JSON.stringify(logged[0])).not.toContain('Owner#2024');
+  });
+
+  test('explicit entries are redacted too', async () => {
+    await AuditLog.deleteMany({});
+    await createAuditEntry({
+      userId: owner._id, username: 'owner', action: 'OTHER', module: 'System',
+      details: { role: 'owner', session: { accessToken: 'at-value', keyword: 'kept' } },
+    });
+    const [entry] = await AuditLog.find().lean();
+    expect(entry.details).toEqual({ role: 'owner', session: { accessToken: '[REDACTED]', keyword: 'kept' } });
   });
 });
 

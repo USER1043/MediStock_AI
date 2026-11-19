@@ -116,7 +116,7 @@ User-management safeguards in `authController`: you can't delete yourself, you c
 |-----------|-----------------|
 | `auditLogger` middleware | Every successful `POST/PUT/PATCH/DELETE`: user, action and module (looked up by route in `AUDIT_ROUTES`, e.g. `MEDICINE_UPDATED` / `Inventory`), sanitised body and params, IP (honours `X-Forwarded-For`), method, full endpoint, status. Not logged: failed requests (status ≥ 400), chatbot queries, alert regeneration, 2FA setup (enabling 2FA at verify-setup is `TWO_FA_ENABLED`) |
 | `createAuditEntry()` / direct `AuditLog.create` | Login (`USER_LOGIN`, including 2FA logins), Excel upload details (`EXCEL_UPLOAD`), forecast runs and retrains (`FORECAST_RUN`, `MODEL_RETRAINED`), alert resolution (`ALERT_RESOLVED`). The middleware skips these routes, so each is logged once |
-| Body sanitising | Keys `password`, `token`, `secret`, `key` and `auth` become `[REDACTED]` (top level only) |
+| Redaction | `redactSecrets` replaces sensitive values with `[REDACTED]` at any depth, through nested objects and arrays (depth 8, first 100 array items), in the middleware's body and in `createAuditEntry` details. A key is sensitive when its last word is password, passwd, passphrase, token, secret, authorization or cookie (so `newPassword`, `confirmPassword`, `accessToken`, `refresh_token`, `twoFactorSecret`, `Authorization` match), or when the whole key is one of a fixed list (`key`, `auth`, `apiKey`, `privateKey`, `pin`, `otp`, ...). Lookalikes such as `keyword`, `author`, `pincode` and `tokenCount` are kept |
 
 Owners browse the log at `/activity-log` (`GET /api/audit`, `GET /api/audit/stats`).
 
