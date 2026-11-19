@@ -11,10 +11,11 @@
  * Usage: node runUpdateUser.mjs <mongoUri> '<json { params, body, user }>'
  */
 
-import { registerHooks } from 'node:module';
+import * as nodeModule from 'node:module';
 
-// Swap the file logger for a no-op so the run leaves no log files behind
-registerHooks({
+// Swap the file logger for a no-op so the run leaves no log files behind. module.registerHooks only exists on
+// Node 22.15+ / 23.5+; on older Node the real logger runs (it just writes to logs/), and the test still works.
+nodeModule.registerHooks?.({
   resolve(specifier, context, nextResolve) {
     if (specifier.endsWith('/utils/logger.js')) {
       return { url: 'data:text/javascript,export default () => {};', shortCircuit: true };
