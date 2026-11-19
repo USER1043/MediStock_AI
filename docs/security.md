@@ -97,7 +97,8 @@ sequenceDiagram
 | Generate reorder drafts, update PO status | ✅ | ✅ |
 | Activate a PO from a draft (`POST /suppliers/purchase-orders`) | ✅ | ❌ |
 | Run or retrain the forecast (replaces all AI drafts), save forecast parameters | ✅ | ❌ |
-| Review / approve forecast recommendations | ✅ | ✅ |
+| View forecast recommendations, add a manual one, adjust a draft's quantity, priority or date | ✅ | ✅ |
+| Approve (→ `Pending`), reject or delete a forecast draft | ✅ | ❌ |
 | User management, register users | ✅ | ❌ |
 | Audit log | ✅ | ❌ |
 | Chatbot | ✅ | ✅ |

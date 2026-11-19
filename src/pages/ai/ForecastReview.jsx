@@ -11,6 +11,7 @@ import {
   FaCheck,
   FaEdit,
   FaTrash,
+  FaTimes,
   FaPlus,
   FaSync,
 } from "react-icons/fa";
@@ -50,9 +51,13 @@ import {
   TablePagination,
 } from "@mui/material";
 import { toast } from "react-hot-toast";
+import { useAuth } from "../../context/AuthContext";
 
 // Renders AI Forecast and Reorder recommendations review panel.
 export default function ForecastReview() {
+  // Staff review and adjust drafts; approving and rejecting are the owner's call (the server enforces this too).
+  const { hasRole } = useAuth();
+  const isOwner = hasRole("owner");
   const [recommendations, setRecommendations] = useState([]);
   const [trendData, setTrendData] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -407,21 +412,24 @@ export default function ForecastReview() {
                           />
                         </TableCell>
                         <TableCell align="right">
+                          {/* Only drafts under review can be changed; approved and rejected rows are history */}
                           {row.status === "pending" || row.status === "adjusted" ? (
                             <>
-                              <IconButton
-                                color="success"
-                                onClick={() =>
-                                  handleStatusUpdate(
-                                    row._id,
-                                    "approved",
-                                    row.optimalReorderQty,
-                                  )
-                                }
-                                title="Approve Recommendation"
-                              >
-                                <FaCheck />
-                              </IconButton>
+                              {isOwner && (
+                                <IconButton
+                                  color="success"
+                                  onClick={() =>
+                                    handleStatusUpdate(
+                                      row._id,
+                                      "approved",
+                                      row.optimalReorderQty,
+                                    )
+                                  }
+                                  title="Approve Recommendation"
+                                >
+                                  <FaCheck />
+                                </IconButton>
+                              )}
                               <IconButton
                                 color="primary"
                                 onClick={() => openEditModal(row)}
@@ -429,33 +437,31 @@ export default function ForecastReview() {
                               >
                                 <FaEdit />
                               </IconButton>
-                              <IconButton
-                                color="error"
-                                onClick={() =>
-                                  handleStatusUpdate(row._id, "rejected")
-                                }
-                                title="Reject Recommendation"
-                              >
-                                <FaTrash />
-                              </IconButton>
+                              {isOwner && (
+                                <>
+                                  <IconButton
+                                    color="warning"
+                                    onClick={() =>
+                                      handleStatusUpdate(row._id, "rejected")
+                                    }
+                                    title="Reject Recommendation"
+                                  >
+                                    <FaTimes />
+                                  </IconButton>
+                                  <IconButton
+                                    color="error"
+                                    onClick={() => handleDelete(row._id)}
+                                    title="Delete Draft"
+                                  >
+                                    <FaTrash />
+                                  </IconButton>
+                                </>
+                              )}
                             </>
                           ) : (
-                            <>
-                              <IconButton
-                                color="primary"
-                                onClick={() => openEditModal(row)}
-                                title="Edit / Re-adjust"
-                              >
-                                <FaEdit />
-                              </IconButton>
-                              <IconButton
-                                color="error"
-                                onClick={() => handleDelete(row._id)}
-                                title="Delete Recommendation"
-                              >
-                                <FaTrash />
-                              </IconButton>
-                            </>
+                            <Typography variant="caption" color="text.secondary">
+                              {row.status === "approved" ? "Sent to purchase orders" : "Closed"}
+                            </Typography>
                           )}
                         </TableCell>
                       </TableRow>

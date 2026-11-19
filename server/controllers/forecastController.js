@@ -224,13 +224,26 @@ export const createRecommendation = async (req, res) => {
     }
 };
 
+// The statuses a recommendation can be in while it is still under review: a fresh forecast draft, or one
+// somebody has adjusted. Anything else (Pending, Ordered, Received, Cancelled, ...) is an ordinary purchase
+// order and these routes must not touch it.
+const REVIEWABLE_STATUSES = ['AI_Draft', 'Adjusted'];
+
+const notAReviewableDraft = (res, order) =>
+    res.status(409).json({
+        success: false,
+        message: `Only forecast drafts can be changed here; this purchase order is ${order.order_status}.`,
+        errorCode: 'NOT_A_DRAFT'
+    });
+
 export const updateRecommendation = async (req, res) => {
     try {
         const { id } = req.params;
         const { status, approvedQty, optimalReorderQty, priority, restockingDate } = req.body;
 
-        const draft = await PurchaseOrder.findById(id);
+        const draft = mongoose.isValidObjectId(id) ? await PurchaseOrder.findById(id) : null;
         if (!draft) return res.status(404).json({ success: false, message: 'Recommendation not found' });
+        if (!REVIEWABLE_STATUSES.includes(draft.order_status)) return notAReviewableDraft(res, draft);
 
         if (status === 'approved') {
             draft.order_status = 'Pending';
@@ -274,7 +287,16 @@ export const updateRecommendation = async (req, res) => {
 
 export const deleteRecommendation = async (req, res) => {
     try {
-        await PurchaseOrder.findByIdAndDelete(req.params.id);
+        const { id } = req.params;
+        // One atomic step so a draft that was approved a moment ago is never deleted
+        const deleted = mongoose.isValidObjectId(id)
+            ? await PurchaseOrder.findOneAndDelete({ _id: id, order_status: { $in: REVIEWABLE_STATUSES } })
+            : null;
+        if (!deleted) {
+            const existing = mongoose.isValidObjectId(id) ? await PurchaseOrder.findById(id).select('order_status').lean() : null;
+            if (!existing) return res.status(404).json({ success: false, message: 'Recommendation not found' });
+            return notAReviewableDraft(res, existing);
+        }
         res.status(200).json({ success: true, message: 'Deleted' });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Error deleting' });

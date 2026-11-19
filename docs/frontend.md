@@ -122,7 +122,7 @@ Set `VITE_API_BASE_URL` in the root `.env` so both point to the same server.
 | Billing | `/inventory`, `/customers/search`, `POST /billing` | FEFO-sorted medicine picker; cart; 12% GST computed on the server |
 | Inventory / MedicineInventory | `/inventory/*` | Batch table, adjust quantity, low stock / near expiry / expired views |
 | ExcelUpload | `POST /uploads/excel`, `GET /uploads`, `/uploads/export`, `POST /forecast/retrain` (owner only) | Shows anomalies and success/failure counts. After a successful import, an owner's upload triggers a forecast re-run; a staff upload doesn't (retrain is owner-only) and shows a note that forecasts update when an owner runs them |
-| ForecastReview | `/forecast/recommendations` (CRUD), `/forecast/trend` | Approve / adjust / reject AI drafts; change priority; add a manual recommendation |
+| ForecastReview | `/forecast/recommendations` (CRUD; approve, reject and delete are owner-only), `/forecast/trend` | Adjust AI drafts and change priority; add a manual recommendation. Approve, reject and delete are shown to the owner only |
 | DemandSetup | `/forecast/parameters`, `POST /forecast/run` | Horizon, lead time, safety stock, 12 monthly multipliers; the *Run forecast* button |
 | ReorderReview | `/suppliers/purchase-orders` | Move POs Pending → Ordered → Shipped → Received |
 | SupplierManagement | `/suppliers/suppliers` | CRUD + performance score |
