@@ -8,6 +8,7 @@ import { InventoryHistory } from '../models/inventoryHistoryModel.js';
 import { ForecastParameters } from '../models/forecastModel.js';
 import { PurchaseOrder, Supplier } from '../models/supplierModels.js';
 import { computeForecast } from '../ml/demandForecast.js';
+import { requestPath } from '../utils/helpers.js';
 
 const DEFAULT_PARAMS = {
     forecastHorizon: 4,
@@ -16,8 +17,9 @@ const DEFAULT_PARAMS = {
     seasonalMultipliers: { jan: 1.0, feb: 1.0, mar: 1.1, apr: 1.2, may: 1.2, jun: 1.1, jul: 1.3, aug: 1.3, sep: 1.2, oct: 1.4, nov: 1.4, dec: 1.2 }
 };
 
-// Generates AI demand forecasts and draft purchase orders for medicines.
-export const runForecast = async (req, res) => {
+// Generates AI demand forecasts and draft purchase orders for medicines, and writes the audit entry
+// (`action`) itself: the audit middleware skips the run and retrain routes.
+const draftForecastOrders = async (req, res, action) => {
     try {
         const medicines = await Medicine.find();
 
@@ -65,11 +67,13 @@ export const runForecast = async (req, res) => {
         await AuditLog.create({
             userId: req.user.id,
             username: req.user.username,
-            action: 'FORECAST_RUN',
-            module: 'Inventory',
+            action,
+            module: 'Forecasting',
             details: { count: created.length },
             ipAddress: req.ip,
-            endpoint: '/api/forecast/run'
+            httpMethod: req.method,
+            endpoint: requestPath(req),
+            statusCode: 200,
         });
 
         res.status(200).json({ success: true, message: `${created.length} AI Draft POs generated`, count: created.length });
@@ -77,6 +81,8 @@ export const runForecast = async (req, res) => {
         res.status(500).json({ success: false, message: 'Error running forecast', error: error.message });
     }
 };
+
+export const runForecast = (req, res) => draftForecastOrders(req, res, 'FORECAST_RUN');
 
 export const getRecommendations = async (req, res) => {
     try {
@@ -300,6 +306,4 @@ export const getTrendData = async (req, res) => {
     }
 };
 
-export const triggerRetraining = async (req, res) => {
-    return runForecast(req, res);
-};
+export const triggerRetraining = (req, res) => draftForecastOrders(req, res, 'MODEL_RETRAINED');

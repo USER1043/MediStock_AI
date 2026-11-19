@@ -17,6 +17,10 @@ export const generateToken = (user) => {
   );
 };
 
+// The full path a request was made to (mount path included), without the query string.
+// Unlike req.path, which is relative to the router that handled it.
+export const requestPath = (req) => (req.originalUrl || req.url || '').split('?')[0];
+
 // Get days until expiry (`now` can be passed in so callers and tests share one clock)
 export const getDaysUntilExpiry = (expiryDate, now = new Date()) => {
   const expiry = new Date(expiryDate);
