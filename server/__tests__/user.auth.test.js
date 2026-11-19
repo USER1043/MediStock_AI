@@ -9,6 +9,9 @@ import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import speakeasy from 'speakeasy';
 import bcryptjs from 'bcryptjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-only-secret';
 
@@ -23,7 +26,7 @@ jest.unstable_mockModule('../middleware/auditLogger.js', () => ({
 }));
 
 const { User } = await import('../models/userModel.js');
-const { register, login, setup2FA, verify2FASetup, verify2FALogin } = await import(
+const { register, login, updateUser, setup2FA, verify2FASetup, verify2FALogin } = await import(
   '../controllers/authController.js'
 );
 
@@ -46,6 +49,15 @@ const mockRes = () => {
     return res;
   };
   return res;
+};
+
+// Runs updateUser in a plain Node child process (see helpers/runUpdateUser.mjs for why)
+const runUpdateUserInNode = async (uri, req) => {
+  const script = fileURLToPath(new URL('./helpers/runUpdateUser.mjs', import.meta.url));
+  const { stdout } = await promisify(execFile)(process.execPath, [script, uri, JSON.stringify(req)], {
+    env: { ...process.env, NODE_OPTIONS: '' },
+  });
+  return JSON.parse(stdout);
 };
 
 const BCRYPT_HASH = /^\$2[aby]\$10\$.{53}$/;
@@ -198,6 +210,74 @@ describe('User model and auth controller', () => {
 
       expect(res.statusCode).toBe(403);
       expect(await User.countDocuments({ username: 'staff2' })).toBe(0);
+    });
+  });
+
+  describe('updateUser controller', () => {
+    const insertStaff = async () => {
+      const [staff] = await User.insertMany([
+        {
+          username: 'staff',
+          email: 'staff@test.local',
+          password: bcryptjs.hashSync('staff123', 10),
+          role: 'staff',
+        },
+      ]);
+      return staff;
+    };
+
+    test('owner changes a user password: stored as a bcrypt hash, login uses the new one', async () => {
+      const owner = await insertOwner();
+      const staff = await insertStaff();
+
+      // Plain Node, so a CommonJS-interop bug in how bcryptjs is imported shows up
+      const res = await runUpdateUserInNode(server.getUri(), {
+        params: { id: staff._id.toString() },
+        body: { password: 'new-staff-456' },
+        user: ownerReqUser(owner),
+      });
+
+      expect(res.body.error).toBeUndefined();
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.user.password).toBeUndefined();
+
+      const stored = await User.findById(staff._id).lean();
+      expect(stored.password).toMatch(BCRYPT_HASH);
+      expect(stored.password).not.toBe(staff.password);
+      await expect(bcryptjs.compare('new-staff-456', stored.password)).resolves.toBe(true);
+
+      const newLogin = mockRes();
+      await login(mockReq({ body: { username: 'staff', password: 'new-staff-456' } }), newLogin);
+      expect(newLogin.statusCode).toBe(200);
+      expect(typeof newLogin.body.token).toBe('string');
+
+      const oldLogin = mockRes();
+      await login(mockReq({ body: { username: 'staff', password: 'staff123' } }), oldLogin);
+      expect(oldLogin.statusCode).toBe(401);
+    }, 30000);
+
+    test('updating only email and role leaves the password hash unchanged', async () => {
+      const owner = await insertOwner();
+      const staff = await insertStaff();
+
+      const res = mockRes();
+      await updateUser(
+        mockReq({
+          params: { id: staff._id.toString() },
+          body: { email: 'staff-new@test.local', role: 'owner' },
+          user: ownerReqUser(owner),
+        }),
+        res
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.user).toMatchObject({ email: 'staff-new@test.local', role: 'owner' });
+
+      const stored = await User.findById(staff._id).lean();
+      expect(stored.email).toBe('staff-new@test.local');
+      expect(stored.role).toBe('owner');
+      expect(stored.password).toBe(staff.password);
     });
   });
 

@@ -4,6 +4,7 @@ import log from '../utils/logger.js';
 import { createAuditEntry } from '../middleware/auditLogger.js';
 import speakeasy from 'speakeasy';
 import qrcode from 'qrcode';
+import bcryptjs from 'bcryptjs';
 
 // Register new user (Owner only - for adding staff)
 export const register = async (req, res) => {
@@ -316,7 +317,6 @@ export const updateUser = async (req, res) => {
 
     // If password is being updated, hash it
     if (password) {
-      const bcryptjs = await import('bcryptjs');
       const salt = await bcryptjs.genSalt(10);
       updateData.password = await bcryptjs.hash(password, salt);
     }
