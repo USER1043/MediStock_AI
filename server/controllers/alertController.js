@@ -178,7 +178,7 @@ export const resolveAlert = async (req, res) => {
     const alert = await Alert.findByIdAndUpdate(
       id,
       { isResolved: true },
-      { new: true }
+      { returnDocument: 'after' }
     );
 
     if (!alert) {

@@ -34,7 +34,7 @@ describe('Integration Test: POST /api/uploads/excel', () => {
         testUser = await User.create({
             username: 'qa_engineer',
             email: 'qa@medistock.test',
-            password: 'hashedpassword',
+            password: 'QaEngineer#1',
             role: 'owner',
         });
         token = jwt.sign({ id: testUser._id, role: testUser.role }, process.env.JWT_SECRET || 'secret', { expiresIn: '1h' });

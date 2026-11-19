@@ -105,7 +105,7 @@ export const updateCustomer = async (req, res) => {
     const updates = req.body;
 
     const customer = await Customer.findByIdAndUpdate(id, updates, {
-      new: true,
+      returnDocument: 'after',
       runValidators: true,
     });
 
