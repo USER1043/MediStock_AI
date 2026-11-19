@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { FaChartBar, FaDownload, FaSyncAlt, FaExclamationTriangle } from 'react-icons/fa';
 import axiosInstance from '../utils/axiosConfig';
+import { supplierIdOf } from '../utils/suppliers';
 
 // Renders financial reporting dashboard connected to backend sales and purchase APIs.
 const FinancialReports = () => {
@@ -30,10 +31,13 @@ const FinancialReports = () => {
       if (startDate) params.startDate = startDate;
       if (endDate) params.endDate = endDate;
 
-      const [salesRes, purchaseRes] = await Promise.all([
+      const [salesRes, purchaseRes, suppliersRes] = await Promise.all([
         axiosInstance.get('/reports/sales', { params }),
         axiosInstance.get('/reports/purchase', { params }),
+        // Only used to count suppliers correctly; the report still loads without it
+        axiosInstance.get('/suppliers').catch(() => ({ data: [] })),
       ]);
+      const suppliers = Array.isArray(suppliersRes.data) ? suppliersRes.data : (suppliersRes.data?.suppliers || []);
 
       const salesReport = salesRes.data?.report || {};
       const purchaseReport = purchaseRes.data?.report || {};
@@ -70,7 +74,8 @@ const FinancialReports = () => {
         }
         purchaseGrouped[key].amount += (med.purchasePrice || 0) * (med.quantity || 0);
         purchaseGrouped[key].items += 1;
-        if (med.supplier) purchaseGrouped[key].suppliers.add(med.supplier);
+        // Count by supplier id, so a supplier stored by id on one medicine and by name on another counts once
+        if (med.supplier) purchaseGrouped[key].suppliers.add(supplierIdOf(med.supplier, suppliers) || med.supplier);
       });
 
       const allKeys = Array.from(new Set([...Object.keys(salesGrouped), ...Object.keys(purchaseGrouped)]));

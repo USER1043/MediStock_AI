@@ -38,8 +38,8 @@ Base URL (local): `http://localhost:5000/api`
 | GET | `/history` | owner, staff | Inventory movement ledger |
 | GET | `/intelligence` | owner | Fast/slow movers, critical items, recommendations |
 | GET | `/:id` | any | One medicine |
-| POST | `/` | owner, staff | `{name, category, batchNumber, expiryDate, quantity, purchasePrice, sellingPrice, rackNumber, reorderLevel?, supplier?}`. Upserts by `name`: adds a new batch or tops up an existing one. |
-| PUT | `/:id` | owner, staff | Update medicine fields |
+| POST | `/` | owner, staff | `{name, category, batchNumber, expiryDate, quantity, purchasePrice, sellingPrice, rackNumber, reorderLevel?, supplier?}`. Upserts by `name`: adds a new batch or tops up an existing one. `supplier` must be an existing supplier's `_id` (400 otherwise); omitted means none. |
+| PUT | `/:id` | owner, staff | Update medicine fields. `supplier` must be an existing supplier's `_id` (400 otherwise); an empty `supplier` leaves the stored one unchanged. |
 | DELETE | `/:id` | owner | Delete medicine |
 | POST | `/:id/adjust-quantity` | owner, staff | `{quantityChanged, reason}`. Negative values deduct FEFO from the oldest batch; positive values add to the newest batch. |
 

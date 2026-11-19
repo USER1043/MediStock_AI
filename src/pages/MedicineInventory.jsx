@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import dayjs from 'dayjs';
 import axiosInstance from '../utils/axiosConfig';
+import { supplierIdOf, supplierNameOf } from '../utils/suppliers';
 
 // MUI imports
 import {
@@ -197,7 +198,9 @@ const MedicineInventory = () => {
             stockQuantity: row.stockQuantity,
             rackNumber: row.rackNumber,
             expiryDate: dayjs(row.expiryDate),
-            supplierId: row.supplierId || '',
+            // Older records may store the supplier's name: map it to the id so the dropdown shows it.
+            // No match leaves it empty, and an empty supplier is left unchanged on update.
+            supplierId: supplierIdOf(row.supplierId, suppliers),
         });
         setSelectedRow(row);
         setIsEditMode(true);
@@ -333,6 +336,8 @@ const MedicineInventory = () => {
             headerName: 'Supplier',
             flex: 1.1,
             minWidth: 130,
+            // The row holds the stored supplier id (or an older name); show the supplier's name
+            valueGetter: (value, row) => supplierNameOf(row.supplierId, suppliers),
         },
     ];
 
@@ -583,7 +588,7 @@ const MedicineInventory = () => {
                                         onChange={handleChange('supplierId')}
                                     >
                                         {suppliers.map((s) => (
-                                            <MenuItem key={s.supplier_name} value={s.supplier_name}>
+                                            <MenuItem key={s._id} value={s._id}>
                                                 {s.supplier_name}
                                             </MenuItem>
                                         ))}

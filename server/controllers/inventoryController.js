@@ -7,6 +7,7 @@ import {
   getStockStatus,
 } from '../utils/helpers.js';
 import log from '../utils/logger.js';
+import { resolveSupplierId, isBlankSupplier } from '../utils/supplierRef.js';
 
 // Get all medicines
 export const getAllMedicines = async (req, res) => {
@@ -79,6 +80,14 @@ export const createMedicine = async (req, res) => {
       });
     }
 
+    // Medicine.supplier holds a Supplier _id so reorders can find the supplier; refuse names or unknown ids
+    if (!isBlankSupplier(supplier) && !(await resolveSupplierId(supplier))) {
+      return res.status(400).json({
+        success: false,
+        message: 'supplier must be the id of an existing supplier',
+      });
+    }
+
     const numQuantity = Number(quantity) || 0;
     const existingMedicine = await Medicine.findOne({ name });
 
@@ -110,7 +119,7 @@ export const createMedicine = async (req, res) => {
         sellingPrice,
         reorderLevel: reorderLevel || 50,
         stockStatus: getStockStatus(numQuantity, reorderLevel || 50),
-        supplier: supplier || 'Default Supplier',
+        ...(isBlankSupplier(supplier) ? {} : { supplier }),
         batches: [{
           batchNumber, expiryDate, quantity: numQuantity, rackNumber
         }]
@@ -142,6 +151,16 @@ export const updateMedicine = async (req, res) => {
 
     // Remove immutable or deeply nested arrays from simple update payload
     delete updates.batches;
+
+    // An empty supplier leaves the stored one as is; anything else must be an existing supplier's _id
+    if (isBlankSupplier(updates.supplier)) {
+      delete updates.supplier;
+    } else if (!(await resolveSupplierId(updates.supplier))) {
+      return res.status(400).json({
+        success: false,
+        message: 'supplier must be the id of an existing supplier',
+      });
+    }
 
     const medicine = await Medicine.findByIdAndUpdate(
       id,
