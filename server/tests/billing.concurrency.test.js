@@ -67,8 +67,19 @@ const bill = (items) =>
     body: { customerName: 'Load Test', customerType: 'walking', paymentMethod: 'cash', items },
   });
 
-const adjust = (medicineId, quantityChanged) =>
-  invoke(adjustQuantity, { params: { id: medicineId.toString() }, body: { quantityChanged, reason: 'load test' } });
+// Adding stock must name the batch it goes into (batchNumber + expiryDate), so pass one for restocks
+const adjust = (medicineId, quantityChanged, batch) =>
+  invoke(adjustQuantity, {
+    params: { id: medicineId.toString() },
+    body: {
+      quantityChanged,
+      reason: 'load test',
+      ...(batch ? { batchNumber: batch.batchNumber, expiryDate: batch.expiryDate } : {}),
+    },
+  });
+
+// 0 - n instead of -n: when nothing sold, -0 would fail toBe(0) (Object.is treats them as different)
+const negated = (n) => 0 - n;
 
 // Retries a request the way a client should after a 409 (or a transaction write conflict)
 const withRetry = async (fn, attempts = 50) => {
@@ -192,7 +203,7 @@ describe.each(topologies)('Billing concurrency on a %s', (_label, startServer, e
     expect(consumed).toBe(succeeded.length * 3);
     expect(consumed).toBeLessThanOrEqual(initialStock);
     expect(await soldUnits(med._id)).toBe(consumed);
-    expect(await historyTotal(med._id, 'sale')).toBe(-consumed);
+    expect(await historyTotal(med._id, 'sale')).toBe(negated(consumed));
     expect(await Bill.countDocuments()).toBe(succeeded.length);
     expectFefoOrder(med.batches, final.batches);
 
@@ -276,7 +287,7 @@ describe.each(topologies)('Billing concurrency on a %s', (_label, startServer, e
       const final = await expectConsistentStock(id);
       const consumed = initial - final.quantity;
       expect(await soldUnits(id)).toBe(consumed);
-      expect(await historyTotal(id, 'sale')).toBe(-consumed);
+      expect(await historyTotal(id, 'sale')).toBe(negated(consumed));
     }
     const finalShared = await Medicine.findById(shared._id).lean();
     expectFefoOrder(shared.batches, finalShared.batches);
@@ -290,9 +301,10 @@ describe.each(topologies)('Billing concurrency on a %s', (_label, startServer, e
       { batchNumber: 'O-LATE', expiresInDays: 250, quantity: 40 },
     ]);
     const initialStock = med.quantity;
+    const restockBatch = med.batches.find((b) => b.batchNumber === 'O-LATE');
 
     const requests = Array.from({ length: LOAD }, (_, i) => {
-      if (i % 4 === 0) return adjust(med._id, 5).then((r) => ({ ...r, kind: 'restock' }));
+      if (i % 4 === 0) return adjust(med._id, 5, restockBatch).then((r) => ({ ...r, kind: 'restock' }));
       if (i % 4 === 1) return adjust(med._id, -2).then((r) => ({ ...r, kind: 'writeoff' }));
       return bill([{ medicineId: med._id.toString(), quantity: 3 }]).then((r) => ({ ...r, kind: 'bill' }));
     });
@@ -303,12 +315,14 @@ describe.each(topologies)('Billing concurrency on a %s', (_label, startServer, e
       const success = r.kind === 'bill' ? 201 : 200;
       if (r.status !== success) expect(allowedFailures).toContain(r.status);
     }
+    // A restock may lose a race (409/500) but must never be rejected as invalid, or this test stops covering restocks
+    expect(results.filter((r) => r.kind === 'restock' && r.status === 400)).toEqual([]);
 
     const expected = initialStock + 5 * ok('restock', 200) - 2 * ok('writeoff', 200) - 3 * ok('bill', 201);
     const final = await expectConsistentStock(med._id);
     expect(final.quantity).toBe(expected);
     expect(await soldUnits(med._id)).toBe(3 * ok('bill', 201));
-    expect(await historyTotal(med._id, 'sale')).toBe(-3 * ok('bill', 201));
+    expect(await historyTotal(med._id, 'sale')).toBe(negated(3 * ok('bill', 201)));
     expect(await historyTotal(med._id, 'adjustment')).toBe(5 * ok('restock', 200) - 2 * ok('writeoff', 200));
 
     console.log(`[${_label}] bills + adjustments: ${JSON.stringify(countStatuses(results))}`);
