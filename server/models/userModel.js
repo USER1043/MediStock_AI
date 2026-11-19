@@ -56,15 +56,12 @@ const userSchema = new mongoose.Schema(
 );
 
 // Hashes user password if it has been modified.
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
-  try {
-    const salt = await bcryptjs.genSalt(10);
-    this.password = await bcryptjs.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
-  }
+// Mongoose 9 no longer passes `next` to middleware: an async hook signals
+// completion by resolving and failure by throwing.
+userSchema.pre('save', async function () {
+  if (!this.isModified('password')) return;
+  const salt = await bcryptjs.genSalt(10);
+  this.password = await bcryptjs.hash(this.password, salt);
 });
 
 // Verifies if the entered password matches the stored password.
