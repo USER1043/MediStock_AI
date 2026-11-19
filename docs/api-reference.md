@@ -61,11 +61,11 @@ Base URL (local): `http://localhost:5000/api`
 |--------|------|------|-------------|
 | GET | `/` | any | List |
 | GET | `/stats` | any | Customer statistics |
-| GET | `/search` | any | Search by name or phone |
+| GET | `/search` | any | Search by name, phone or email (`?query=`, matched literally and case-insensitively) |
 | GET | `/:id` | any | One customer |
 | POST | `/` | owner, staff | Create (`phone` must be unique) |
-| PUT | `/:id` | owner, staff | Update |
-| DELETE | `/:id` | owner | Delete |
+| PUT | `/:id` | owner, staff | Update `name`, `phone`, `email`, `customerType`, `address`, `city` only (computed totals are ignored). `400` on a duplicate `phone` or invalid value. |
+| DELETE | `/:id` | owner | Delete. `409` if the customer has any bills. |
 
 ## Alerts — `/api/alerts`
 

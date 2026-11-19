@@ -1,5 +1,11 @@
 import { Customer } from '../models/customerModel.js';
+import { Bill } from '../models/billModel.js';
 import log from '../utils/logger.js';
+
+// Fields a client may edit; totals (totalPurchases, totalSpent) and timestamps are computed
+const EDITABLE_FIELDS = ['name', 'phone', 'email', 'customerType', 'address', 'city'];
+
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Create customer
 export const createCustomer = async (req, res) => {
@@ -102,12 +108,31 @@ export const getCustomer = async (req, res) => {
 export const updateCustomer = async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const body = req.body || {};
+    const updates = {};
+    for (const field of EDITABLE_FIELDS) {
+      if (body[field] !== undefined) updates[field] = body[field];
+    }
 
-    const customer = await Customer.findByIdAndUpdate(id, updates, {
-      returnDocument: 'after',
-      runValidators: true,
-    });
+    if (updates.phone !== undefined) {
+      const duplicate =
+        typeof updates.phone === 'string' && (await Customer.exists({ phone: updates.phone, _id: { $ne: id } }));
+      if (duplicate) {
+        return res.status(400).json({
+          success: false,
+          message: 'Customer with this phone already exists',
+        });
+      }
+    }
+
+    const customer = await Customer.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      {
+        returnDocument: 'after',
+        runValidators: true,
+      }
+    );
 
     if (!customer) {
       return res.status(404).json({
@@ -124,6 +149,16 @@ export const updateCustomer = async (req, res) => {
       customer,
     });
   } catch (error) {
+    if (error.code === 11000) {
+      // Lost a race with another writer between the pre-check and the update
+      return res.status(400).json({
+        success: false,
+        message: 'Customer with this phone already exists',
+      });
+    }
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ success: false, message: error.message });
+    }
     log('ERROR', 'Update customer error', { error: error.message });
     res.status(500).json({
       success: false,
@@ -137,6 +172,15 @@ export const updateCustomer = async (req, res) => {
 export const deleteCustomer = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Bills keep a customerId reference, so a customer with billing history cannot be removed
+    const billCount = await Bill.countDocuments({ customerId: id });
+    if (billCount > 0) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot delete this customer: they have ${billCount} bill${billCount === 1 ? '' : 's'} on record.`,
+      });
+    }
 
     const customer = await Customer.findByIdAndDelete(id);
 
@@ -175,11 +219,19 @@ export const searchCustomers = async (req, res) => {
       });
     }
 
+    if (typeof query !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Search query must be a string',
+      });
+    }
+
+    const pattern = escapeRegex(query);
     const customers = await Customer.find({
       $or: [
-        { name: { $regex: query, $options: 'i' } },
-        { phone: { $regex: query, $options: 'i' } },
-        { email: { $regex: query, $options: 'i' } },
+        { name: { $regex: pattern, $options: 'i' } },
+        { phone: { $regex: pattern, $options: 'i' } },
+        { email: { $regex: pattern, $options: 'i' } },
       ],
     });
 
