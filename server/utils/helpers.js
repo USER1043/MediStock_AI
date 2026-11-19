@@ -17,11 +17,10 @@ export const generateToken = (user) => {
   );
 };
 
-// Get days until expiry
-export const getDaysUntilExpiry = (expiryDate) => {
-  const today = new Date();
+// Get days until expiry (`now` can be passed in so callers and tests share one clock)
+export const getDaysUntilExpiry = (expiryDate, now = new Date()) => {
   const expiry = new Date(expiryDate);
-  const diffTime = expiry - today;
+  const diffTime = expiry - new Date(now);
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 };
 
@@ -64,23 +63,23 @@ export const sortByFEFO = (medicines) => {
 };
 
 // Check if medicine is near expiry (within 7 days)
-export const isNearExpiry = (expiryDate, days = 7) => {
-  const daysLeft = getDaysUntilExpiry(expiryDate);
+export const isNearExpiry = (expiryDate, days = 7, now = new Date()) => {
+  const daysLeft = getDaysUntilExpiry(expiryDate, now);
   return daysLeft <= days && daysLeft > 0;
 };
 
 // Check if medicine is expired
-export const isExpired = (expiryDate) => {
-  return getDaysUntilExpiry(expiryDate) <= 0;
+export const isExpired = (expiryDate, now = new Date()) => {
+  return getDaysUntilExpiry(expiryDate, now) <= 0;
 };
 
 // Split a medicine's in-stock batches into near-expiry and expired groups.
 // Expiry lives on each batch, not on the medicine itself.
-export const getExpiringBatches = (batches, days = 7) => {
+export const getExpiringBatches = (batches, days = 7, now = new Date()) => {
   const inStock = (batches || []).filter(b => b.quantity > 0 && b.expiryDate);
   return {
-    nearExpiry: inStock.filter(b => isNearExpiry(b.expiryDate, days)),
-    expired: inStock.filter(b => isExpired(b.expiryDate)),
+    nearExpiry: inStock.filter(b => isNearExpiry(b.expiryDate, days, now)),
+    expired: inStock.filter(b => isExpired(b.expiryDate, now)),
   };
 };
 

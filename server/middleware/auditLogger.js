@@ -43,6 +43,10 @@ export const auditLogger = (req, res, next) => {
     // Skip login — recorded explicitly in authController with more context
     if (/\/api\/auth\/login/i.test(req.path)) return next();
 
+    // Skip alert resolution — recorded explicitly in alertController with the alert's details.
+    // (originalUrl, because req.path is relative to the router by the time 'finish' fires)
+    if (/^\/api\/alerts\/[^/]+\/resolve/i.test(req.originalUrl || '')) return next();
+
     res.on('finish', () => {
         // Only log successful responses
         if (res.statusCode >= 400) return;
