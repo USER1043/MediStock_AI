@@ -69,6 +69,16 @@ describe('audit route table', () => {
     expect(bad).toEqual([]);
   });
 
+  test('the Activity Log page offers every action and module the model allows', () => {
+    const page = fs.readFileSync(new URL('../../src/pages/ActivityLog.jsx', import.meta.url), 'utf8');
+    const actionBlock = page.match(/const ACTION_OPTIONS = \[([\s\S]*?)\n\];/)[1];
+    const moduleBlock = page.match(/const MODULE_OPTIONS = \[([\s\S]*?)\];/)[1];
+    const actions = [...actionBlock.matchAll(/value: '([A-Z0-9_]+)'/g)].map((m) => m[1]);
+    const modules = [...moduleBlock.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    expect([...actions].sort()).toEqual([...AUDIT_ACTIONS].sort());
+    expect([...modules].sort()).toEqual([...AUDIT_MODULES].sort());
+  });
+
   test('server.js mounts the API through this list and adds no write routes of its own', () => {
     const source = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
     expect(source).toContain('mountApiRouters(app)');
