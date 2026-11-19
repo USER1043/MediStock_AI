@@ -519,6 +519,11 @@ export default function ForecastReview() {
                 type="number"
                 fullWidth
                 value={formData.optimalReorderQty}
+                inputProps={{ min: 1, step: 1 }}
+                error={!(formData.optimalReorderQty >= 1)}
+                helperText={
+                  formData.optimalReorderQty >= 1 ? " " : "Enter a quantity of at least 1"
+                }
                 onChange={(e) =>
                   setFormData((f) => ({
                     ...f,
@@ -559,7 +564,11 @@ export default function ForecastReview() {
         </DialogContent>
         <DialogActions sx={{ p: 2.5 }}>
           <Button onClick={() => setIsModalOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleModalSubmit}>
+          <Button
+            variant="contained"
+            onClick={handleModalSubmit}
+            disabled={!(formData.optimalReorderQty >= 1)}
+          >
             {modalType === "add" ? "Create" : "Save Changes"}
           </Button>
         </DialogActions>
