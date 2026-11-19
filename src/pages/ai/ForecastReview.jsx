@@ -62,7 +62,7 @@ export default function ForecastReview() {
   const [trendData, setTrendData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState({ priority: "", status: "new" });
+  const [filters, setFilters] = useState({ priority: "", status: "to_review" });
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
@@ -198,9 +198,12 @@ export default function ForecastReview() {
       !filters.priority ||
       rec.priority?.toLowerCase() === filters.priority.toLowerCase();
 
+    // "to_review" = everything still waiting for the owner's decision: new and adjusted drafts
     const matchesStatus =
       !filters.status ||
-      rec.status?.toLowerCase() === filters.status.toLowerCase();
+      (filters.status === "to_review"
+        ? rec.status === "new" || rec.status === "adjusted"
+        : rec.status === filters.status);
 
     return matchesSearch && matchesPriority && matchesStatus;
   });
@@ -323,11 +326,12 @@ export default function ForecastReview() {
                   setPage(0);
                 }}
               >
-                <MenuItem value="">All Statuses</MenuItem>
+                <MenuItem value="to_review">To review (new + adjusted)</MenuItem>
                 <MenuItem value="new">New</MenuItem>
-                <MenuItem value="approved">Approved</MenuItem>
                 <MenuItem value="adjusted">Adjusted</MenuItem>
+                <MenuItem value="approved">Approved</MenuItem>
                 <MenuItem value="rejected">Rejected</MenuItem>
+                <MenuItem value="">All</MenuItem>
               </Select>
             </FormControl>
           </Box>
