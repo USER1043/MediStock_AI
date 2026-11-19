@@ -74,20 +74,21 @@ export const isExpired = (expiryDate) => {
   return getDaysUntilExpiry(expiryDate) <= 0;
 };
 
-// Calculate KPIs
-export const calculateKPIs = (medicines) => {
-  const totalMedicines = medicines.length;
-  const lowStockCount = medicines.filter(m => m.stockStatus === 'low').length;
-  const nearExpiryCount = medicines.filter(m => isNearExpiry(m.expiryDate)).length;
-  const expiredCount = medicines.filter(m => isExpired(m.expiryDate)).length;
-
+// Split a medicine's in-stock batches into near-expiry and expired groups.
+// Expiry lives on each batch, not on the medicine itself.
+export const getExpiringBatches = (batches, days = 7) => {
+  const inStock = (batches || []).filter(b => b.quantity > 0 && b.expiryDate);
   return {
-    totalMedicines,
-    lowStockCount,
-    nearExpiryCount,
-    expiredCount,
+    nearExpiry: inStock.filter(b => isNearExpiry(b.expiryDate, days)),
+    expired: inStock.filter(b => isExpired(b.expiryDate)),
   };
 };
+
+// Describe batches for alert messages, e.g. "B12 (exp 3/5/2026, rack A1, qty 20)"
+export const describeBatches = (batches) =>
+  batches
+    .map(b => `${b.batchNumber} (exp ${new Date(b.expiryDate).toLocaleDateString()}, rack ${b.rackNumber || 'N/A'}, qty ${b.quantity})`)
+    .join('; ');
 
 // Detect anomalies in uploaded data
 export const detectAnomalies = (data) => {

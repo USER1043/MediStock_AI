@@ -28,4 +28,4 @@ Pharmacies lose money when medicines expire on the shelf, and staff waste time l
 - ✅ Adjustments deduct from the right batches automatically.
 - ✅ Billing deducts at batch level, FEFO-style, and records the batch number(s) consumed on each bill line.
 - ⚠️ Keeping `quantity` equal to the batch sum depends on every write path; nothing enforces it.
-- ⚠️ Expiry alerts read a top-level `expiryDate` that doesn't exist, so near-expiry and expired alerts never fire until they're changed to read batch expiries.
+- ✅ Expiry alerts and the dashboard's near-expiry list check each batch that still has stock.

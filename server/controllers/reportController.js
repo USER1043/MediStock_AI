@@ -2,7 +2,7 @@ import { Medicine } from '../models/medicineModel.js';
 import { Bill } from '../models/billModel.js';
 import { InventoryHistory } from '../models/inventoryHistoryModel.js';
 import { Alert } from '../models/alertModel.js';
-import { calculateDemandForecast, classifyMovement, isNearExpiry } from '../utils/helpers.js';
+import { calculateDemandForecast, classifyMovement, getExpiringBatches } from '../utils/helpers.js';
 import log from '../utils/logger.js';
 
 // Get sales report
@@ -393,9 +393,19 @@ export const getDashboardAnalytics = async (req, res) => {
     }
 
     // ── 4. Active Alerts Summary ─────────────────────────────
-    const allMedicines = await Medicine.find().select('name category quantity reorderLevel expiryDate _id').lean();
+    const allMedicines = await Medicine.find().select('name category quantity reorderLevel batches _id').lean();
     const lowStockMeds = allMedicines.filter((m) => m.quantity <= m.reorderLevel);
-    const nearExpiryMeds = allMedicines.filter((m) => isNearExpiry(m.expiryDate, 7));
+    // Expiry is tracked per batch: report each medicine's in-stock batches expiring within 7 days
+    const nearExpiryMeds = allMedicines
+      .map((m) => ({ medicine: m, batches: getExpiringBatches(m.batches, 7).nearExpiry }))
+      .filter(({ batches }) => batches.length > 0)
+      .map(({ medicine, batches }) => ({
+        _id: medicine._id,
+        name: medicine.name,
+        expiryDate: new Date(Math.min(...batches.map((b) => new Date(b.expiryDate)))),
+        quantity: batches.reduce((sum, b) => sum + b.quantity, 0),
+      }))
+      .sort((a, b) => a.expiryDate - b.expiryDate);
 
     const [criticalAlerts, warningAlerts] = await Promise.all([
       Alert.countDocuments({ severity: 'critical', isResolved: false }),
@@ -431,10 +441,8 @@ export const getDashboardAnalytics = async (req, res) => {
         stockDistribution,
         forecastComparison,
         alertSummary,
-        lowStockMeds: lowStockMeds.slice(0, 10),
-        nearExpiryMeds: nearExpiryMeds
-          .slice(0, 10)
-          .map((m) => ({ _id: m._id, name: m.name, expiryDate: m.expiryDate, quantity: m.quantity })),
+        lowStockMeds: lowStockMeds.slice(0, 10).map(({ batches, ...m }) => m),
+        nearExpiryMeds: nearExpiryMeds.slice(0, 10),
         categories,
       },
     });
