@@ -5,7 +5,7 @@
 import { useState, useEffect } from 'react';
 import axiosInstance from '../utils/axiosConfig';
 import { formatCurrency, sortByFEFO } from '../utils/helpers';
-import { FaSearch, FaTrash, FaCheck, FaMicrophone, FaStop, FaPlus, FaEdit, FaTimesCircle } from 'react-icons/fa';
+import { FaSearch, FaTrash, FaCheck, FaMicrophone, FaStop, FaPlus, FaEdit, FaTimesCircle, FaTimes } from 'react-icons/fa';
 
 const Billing = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -101,16 +101,45 @@ const Billing = () => {
     return fresh;
   };
 
-  // The batch the backend will sell from first (earliest expiry that still has stock)
-  const nextBatch = (medicine) => {
-    const batches = (medicine.batches || []).filter(b => b.quantity > 0);
-    batches.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
-    return batches[0] || (medicine.batches && medicine.batches[0]) || {};
-  };
-
   // Units of a medicine already in the bill
   const cartQuantity = (medicineId) =>
     billItems.filter(item => item.medicineId === medicineId).reduce((sum, item) => sum + item.quantity, 0);
+
+  // Split a quantity across batches the way the server sells it: earliest expiry with stock first (FEFO)
+  const allocateFEFO = (medicine, qty) => {
+    const batches = (medicine?.batches || []).filter(b => b.quantity > 0)
+      .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+    const parts = [];
+    let left = qty;
+    for (const batch of batches) {
+      if (left <= 0) break;
+      const take = Math.min(batch.quantity, left);
+      parts.push({ ...batch, take });
+      left -= take;
+    }
+    return parts;
+  };
+
+  // The batch the next unit will come from, after what's already in the bill ({} when nothing is left)
+  const nextBatch = (medicine) => {
+    const inBill = cartQuantity(medicine._id);
+    const parts = allocateFEFO(medicine, inBill + 1);
+    const covered = parts.reduce((sum, p) => sum + p.take, 0);
+    return covered > inBill ? parts[parts.length - 1] : {};
+  };
+
+  // Which batches a bill line's units come from (one line can span batches when the oldest runs out)
+  const lineBatches = (item) => {
+    const parts = allocateFEFO(medicines.find(m => m._id === item.medicineId), item.quantity);
+    if (parts.length === 0) return { batchNo: item.batchNo, rackNo: item.rackNo, expiryDate: item.expiryDate, plain: item.batchNo };
+    const multi = parts.length > 1;
+    return {
+      batchNo: parts.map(p => (multi ? `${p.batchNumber} ×${p.take}` : p.batchNumber)).join(', '),
+      rackNo: [...new Set(parts.map(p => p.rackNumber || 'N/A'))].join(', '),
+      expiryDate: parts.map(p => (p.expiryDate ? new Date(p.expiryDate).toLocaleDateString() : 'N/A')).join(', '),
+      plain: parts.map(p => p.batchNumber).join(', '),
+    };
+  };
 
   // Stock still available to add for the selected medicine, and why Add is blocked (if it is)
   const availableToAdd = selectedMedicine ? selectedMedicine.quantity - cartQuantity(selectedMedicine._id) : 0;
@@ -158,7 +187,7 @@ const Billing = () => {
 
   // Add item to bill
   const handleAddItem = () => {
-    if (!selectedMedicine || quantity <= 0) return;
+    if (!selectedMedicine || !(quantity >= 1)) return;
 
     // Check if enough stock, counting what is already in the bill
     if (addError) return;
@@ -199,9 +228,16 @@ const Billing = () => {
     setBillItems(billItems.filter(item => item.medicineId !== medicineId));
   };
 
+  // Let a quantity box be cleared while typing (''); blur puts back 1 if it's left empty
+  const parseQuantityInput = (value) => {
+    if (value === '') return '';
+    const n = parseInt(value, 10);
+    return Number.isNaN(n) ? '' : Math.max(0, n);
+  };
+
   // Update item quantity (UPDATE operation)
   const handleUpdateItem = (medicineId) => {
-    if (editQuantity <= 0) {
+    if (!(editQuantity >= 1)) {
       return;
     }
 
@@ -278,7 +314,7 @@ const Billing = () => {
         quantity: item.quantity,
         price: item.price,
         total: item.total,
-        batchNumber: item.batchNo
+        batchNumber: lineBatches(item).plain
       })),
       subtotal,
       tax,
@@ -513,6 +549,9 @@ const Billing = () => {
                               <p className="text-xs text-gray-500 mt-1">
                                 Batch: {batch.batchNumber || 'N/A'} | Rack: {batch.rackNumber || 'N/A'} | Stock: {medicine.quantity}
                                 {outOfStock && <span className="ml-2 text-red-600 font-semibold">Out of stock</span>}
+                                {!outOfStock && cartQuantity(medicine._id) >= medicine.quantity && (
+                                  <span className="ml-2 text-amber-600 font-semibold">All in bill</span>
+                                )}
                               </p>
                             </div>
                             <p className="font-bold text-primary-600">{formatCurrency(medicine.sellingPrice)}</p>
@@ -533,26 +572,38 @@ const Billing = () => {
                     <p className="font-semibold text-gray-800">{selectedMedicine.name}</p>
                     <p className="text-sm text-gray-600">{selectedMedicine.category}</p>
                   </div>
-                  <p className="font-bold text-primary-600">{formatCurrency(selectedMedicine.sellingPrice)}</p>
+                  <div className="flex items-center gap-3">
+                    <p className="font-bold text-primary-600">{formatCurrency(selectedMedicine.sellingPrice)}</p>
+                    <button
+                      onClick={() => { setSelectedMedicine(null); setQuantity(1); }}
+                      className="p-1.5 rounded-full text-gray-500 hover:bg-white hover:text-gray-800 transition-colors"
+                      title="Clear selection"
+                      aria-label="Clear selected medicine"
+                    >
+                      <FaTimes size={14} />
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-sm mb-3">
                   <div>
                     <span className="text-gray-600">Batch:</span>
-                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).batchNumber || 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).batchNumber || (availableToAdd <= 0 ? 'None left' : 'N/A')}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Rack:</span>
-                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).rackNumber || 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).rackNumber || '—'}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Expiry:</span>
-                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).expiryDate ? new Date(nextBatch(selectedMedicine).expiryDate).toLocaleDateString() : 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).expiryDate ? new Date(nextBatch(selectedMedicine).expiryDate).toLocaleDateString() : '—'}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Available:</span>
-                    <span className="ml-2 font-semibold">{selectedMedicine.quantity}</span>
+                    <span className="ml-2 font-semibold">{Math.max(availableToAdd, 0)}</span>
                     {cartQuantity(selectedMedicine._id) > 0 && (
-                      <span className="ml-1 text-xs text-gray-500">({cartQuantity(selectedMedicine._id)} in bill)</span>
+                      <span className="ml-1 text-xs text-gray-500">
+                        (of {selectedMedicine.quantity} in stock; {cartQuantity(selectedMedicine._id)} in bill)
+                      </span>
                     )}
                   </div>
                 </div>
@@ -567,7 +618,8 @@ const Billing = () => {
                         min="1"
                         max={Math.max(availableToAdd, 1)}
                         value={quantity}
-                        onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
+                        onChange={(e) => setQuantity(parseQuantityInput(e.target.value))}
+                        onBlur={() => setQuantity((q) => (q >= 1 ? q : 1))}
                         className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
                       />
                       <button
@@ -640,7 +692,7 @@ const Billing = () => {
                             <div>
                               <p className="font-semibold text-gray-800">{item.name}</p>
                               <p className="text-xs text-gray-600">
-                                Batch: {item.batchNo} | Rack: {item.rackNo}
+                                Batch: {lineBatches(item).batchNo} | Rack: {lineBatches(item).rackNo}
                               </p>
                             </div>
                             <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">EDITING</span>
@@ -653,7 +705,8 @@ const Billing = () => {
                                 type="number"
                                 min="1"
                                 value={editQuantity}
-                                onChange={(e) => setEditQuantity(parseInt(e.target.value) || 1)}
+                                onChange={(e) => setEditQuantity(parseQuantityInput(e.target.value))}
+                                onBlur={() => setEditQuantity((q) => (q >= 1 ? q : 1))}
                                 className="w-full px-3 py-1.5 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
                                 autoFocus
                               />
@@ -689,9 +742,9 @@ const Billing = () => {
                             <div>
                               <p className="font-semibold text-gray-800">{item.name}</p>
                               <p className="text-xs text-gray-600">
-                                Batch: {item.batchNo} | Rack: {item.rackNo}
+                                Batch: {lineBatches(item).batchNo} | Rack: {lineBatches(item).rackNo}
                               </p>
-                              <p className="text-xs text-gray-500">Expiry: {item.expiryDate}</p>
+                              <p className="text-xs text-gray-500">Expiry: {lineBatches(item).expiryDate}</p>
                             </div>
                             <div className="flex gap-2">
                               <button
