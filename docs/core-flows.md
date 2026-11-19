@@ -102,19 +102,19 @@ sequenceDiagram
 
     O->>DS: "Run forecast"
     DS->>API: POST /api/forecast/run
-    API->>DB: PurchaseOrder.deleteMany({order_status: 'AI_Draft'})
     loop each medicine
         API->>ML: computeForecast(medicine, params)
         ML->>DB: completed Bills + 'sale' InventoryHistory for this medicine
         ML->>ML: daily series (last 90 days) → LSTM predict horizon×7 days
         ML->>ML: × seasonal multiplier → reorder qty, priority
         ML-->>API: {predictedDemand, optimalReorderQty, priority}
-        opt reorderQty > 0 or priority == high
+        opt reorderQty > 0
             API->>DB: find active Supplier for category (fallback: any supplier)
-            API->>API: build AI_Draft PO
+            API->>API: build AI_Draft PO (priority high → High, etc.)
         end
     end
-    API->>DB: PurchaseOrder.insertMany(drafts)
+    API->>API: validate every new draft
+    API->>DB: replace all AI_Draft POs with the new ones<br/>(transaction on a replica set; standalone: insert new, then delete old)
     API->>DB: AuditLog FORECAST_RUN
     API-->>DS: {count}
 
