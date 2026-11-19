@@ -89,7 +89,7 @@ export default function ForecastReview() {
       setRecommendations(recRes.data?.recommendations || []);
       setTrendData(trendRes.data?.trend || []);
     } catch (error) {
-      toast.error("Failed to fetch forecast data");
+      toast.error(error.response?.data?.message || "Failed to fetch forecast data");
     } finally {
       setLoading(false);
     }
@@ -117,7 +117,7 @@ export default function ForecastReview() {
       toast.success(`Recommendation ${status}`);
       fetchData();
     } catch (error) {
-      toast.error("Failed to update recommendation");
+      toast.error(error.response?.data?.message || "Failed to update recommendation");
     }
   };
 
@@ -130,7 +130,7 @@ export default function ForecastReview() {
       toast.success("Recommendation deleted");
       fetchData();
     } catch (error) {
-      toast.error("Failed to delete recommendation");
+      toast.error(error.response?.data?.message || "Failed to delete recommendation");
     }
   };
 
@@ -158,7 +158,7 @@ export default function ForecastReview() {
       setIsModalOpen(false);
       fetchData();
     } catch (error) {
-      toast.error("Action failed");
+      toast.error(error.response?.data?.message || "Action failed");
     }
   };
 
