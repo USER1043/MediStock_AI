@@ -125,7 +125,7 @@ export const resolveAlert = async (req, res) => {
           autoResolved: false,
         },
       },
-      { new: true }
+      { returnDocument: 'after' }
     );
 
     if (!alert) {
