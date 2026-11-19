@@ -1,35 +1,44 @@
 /**
- * @file Customer management page for viewing customer directory and adding new profiles.
+ * @file Customer management page: browse and search the customer directory, add,
+ * edit and (owner only) delete customer profiles.
  * @module pages/Customers
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import axiosInstance from '../utils/axiosConfig';
-import { FaSearch, FaTimes, FaPlus, FaUserPlus } from 'react-icons/fa';
+import { useAuth } from '../context/AuthContext';
+import { FaSearch, FaTimes, FaPlus, FaUserPlus, FaEdit, FaTrash } from 'react-icons/fa';
+
+const EMPTY_FORM = {
+  name: '',
+  phone: '',
+  email: '',
+  customerType: 'regular',
+  address: '',
+  city: '',
+};
+
+const CUSTOMER_TYPE_LABELS = { regular: 'Regular', walking: 'Walk-in' };
+
+// Build form values from a stored customer (optional fields may be missing).
+const toForm = (customer) =>
+  Object.fromEntries(Object.keys(EMPTY_FORM).map((key) => [key, customer[key] ?? EMPTY_FORM[key]]));
 
 const Customers = () => {
+  const { hasRole } = useAuth();
+  const canDelete = hasRole('owner'); // DELETE /customers/:id is owner-only on the API
   const [searchQuery, setSearchQuery] = useState('');
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    phone: '',
-    email: '',
-    customerType: 'regular',
-    address: '',
-    city: '',
-  });
-
-  const token = localStorage.getItem('medistock_token');
-  const headers = { Authorization: `Bearer ${token}` };
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [editingId, setEditingId] = useState(null); // null = adding a new customer
 
   const fetchCustomers = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await axiosInstance.get(`/customers`);
-      const apiData = res.data.customers || [];
-      setCustomers(apiData);
+      const res = await axiosInstance.get('/customers');
+      setCustomers(res.data.customers || []);
     } catch (err) {
       console.error('Failed to fetch customers:', err);
       setCustomers([]);
@@ -38,65 +47,66 @@ const Customers = () => {
     }
   }, []);
 
-  // Fetch all customers initially
   useEffect(() => {
     fetchCustomers();
   }, [fetchCustomers]);
 
-  // Search handler with API fallback
-  const handleSearch = async (query) => {
-    setSearchQuery(query);
+  // Client-side search over the loaded directory (name, phone or email).
+  const filteredCustomers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return customers;
+    return customers.filter((customer) =>
+      [customer.name, customer.phone, customer.email].some((field) =>
+        (field || '').toLowerCase().includes(query)
+      )
+    );
+  }, [customers, searchQuery]);
 
-    if (!query.trim()) {
-      fetchCustomers();
-      return;
-    }
-
-    // Try API search
-    try {
-      setLoading(true);
-      const res = await axiosInstance.get(`/customers/search`, {
-        params: { query },
-      });
-      setCustomers(res.data.customers || []);
-    } catch (err) {
-      console.error('Search failed:', err);
-      setCustomers([]);
-    } finally {
-      setLoading(false);
-    }
+  const openAddModal = () => {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setIsModalOpen(true);
   };
 
-  const handleClearSearch = () => {
-    setSearchQuery('');
-    handleSearch('');
+  const openEditModal = (customer) => {
+    setEditingId(customer._id);
+    setForm(toForm(customer));
+    setIsModalOpen(true);
   };
 
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setEditingId(null);
+    setForm(EMPTY_FORM);
   };
 
-  const handleAddCustomer = async (e) => {
+  const handleSaveCustomer = async (e) => {
     e.preventDefault();
     try {
-      setAdding(true);
-      await axiosInstance.post('/customers', formData);
-      setIsAddModalOpen(false);
-      setFormData({
-        name: '',
-        phone: '',
-        email: '',
-        customerType: 'regular',
-        address: '',
-        city: '',
-      });
+      setSaving(true);
+      if (editingId) {
+        await axiosInstance.put(`/customers/${editingId}`, form);
+      } else {
+        await axiosInstance.post('/customers', form);
+      }
+      closeModal();
       fetchCustomers();
     } catch (err) {
-      console.error('Failed to create customer:', err);
-      alert(err.response?.data?.message || 'Error creating customer');
+      console.error('Failed to save customer:', err);
+      alert(err.response?.data?.message || 'Error saving customer');
     } finally {
-      setAdding(false);
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteCustomer = async (customer) => {
+    if (!window.confirm(`Delete customer "${customer.name}"? This cannot be undone.`)) return;
+    try {
+      await axiosInstance.delete(`/customers/${customer._id}`);
+      fetchCustomers();
+    } catch (err) {
+      console.error('Failed to delete customer:', err);
+      alert(err.response?.data?.message || 'Error deleting customer');
     }
   };
 
@@ -114,11 +124,21 @@ const Customers = () => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by customer name, phone, or email..."
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm"
+              className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <FaTimes />
+              </button>
+            )}
           </div>
           <button
-            onClick={() => setIsAddModalOpen(true)}
+            onClick={openAddModal}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium text-sm"
           >
             <FaPlus /> Add Customer
@@ -135,6 +155,7 @@ const Customers = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Purchases</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -150,17 +171,43 @@ const Customers = () => {
                             : 'bg-gray-100 text-gray-800'
                           }`}
                       >
-                        {customer.customerType}
+                        {CUSTOMER_TYPE_LABELS[customer.customerType] || customer.customerType || 'Unknown'}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm">{customer.email}</td>
                     <td className="px-6 py-4 text-sm font-semibold">{customer.totalPurchases || '-'}</td>
+                    <td className="px-6 py-4 text-sm text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(customer)}
+                        aria-label={`Edit ${customer.name}`}
+                        title="Edit"
+                        className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg"
+                      >
+                        <FaEdit />
+                      </button>
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCustomer(customer)}
+                          aria-label={`Delete ${customer.name}`}
+                          title="Delete"
+                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                        >
+                          <FaTrash />
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="5" className="px-6 py-8 text-center text-gray-500">
-                    {loading ? 'Searching...' : 'No customers found matching your search'}
+                  <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
+                    {loading
+                      ? 'Loading customers...'
+                      : searchQuery.trim()
+                        ? 'No customers found matching your search'
+                        : 'No customers yet'}
                   </td>
                 </tr>
               )}
@@ -169,30 +216,40 @@ const Customers = () => {
         </div>
       </div>
 
-      {/* Add Customer Modal */}
-      {isAddModalOpen && (
+      {/* Add / Edit Customer Modal */}
+      {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
           <div className="bg-white rounded-xl shadow-lg w-full max-w-md p-6 overflow-y-auto max-h-[90vh]">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                <FaUserPlus className="text-indigo-600" /> Add New Customer
+                {editingId ? (
+                  <>
+                    <FaEdit className="text-indigo-600" /> Edit Customer
+                  </>
+                ) : (
+                  <>
+                    <FaUserPlus className="text-indigo-600" /> Add New Customer
+                  </>
+                )}
               </h2>
               <button
-                onClick={() => setIsAddModalOpen(false)}
+                type="button"
+                onClick={closeModal}
+                aria-label="Close"
                 className="text-gray-400 hover:text-gray-600"
               >
                 <FaTimes />
               </button>
             </div>
 
-            <form onSubmit={handleAddCustomer} className="space-y-4">
+            <form onSubmit={handleSaveCustomer} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
                 <input
                   type="text"
                   required
-                  value={newCustomer.name}
-                  onChange={(e) => setNewCustomer({ ...newCustomer, name: e.target.value })}
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   placeholder="John Doe"
                 />
@@ -203,8 +260,8 @@ const Customers = () => {
                 <input
                   type="tel"
                   required
-                  value={newCustomer.phone}
-                  onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })}
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   placeholder="9876543210"
                 />
@@ -214,8 +271,8 @@ const Customers = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
                 <input
                   type="email"
-                  value={newCustomer.email}
-                  onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   placeholder="john@example.com"
                 />
@@ -224,12 +281,12 @@ const Customers = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Customer Type</label>
                 <select
-                  value={newCustomer.customerType}
-                  onChange={(e) => setNewCustomer({ ...newCustomer, customerType: e.target.value })}
+                  value={form.customerType}
+                  onChange={(e) => setForm({ ...form, customerType: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="regular">Regular</option>
-                  <option value="walk-in">Walk-in</option>
+                  <option value="walking">Walk-in</option>
                 </select>
               </div>
 
@@ -237,8 +294,8 @@ const Customers = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
                 <input
                   type="text"
-                  value={newCustomer.address}
-                  onChange={(e) => setNewCustomer({ ...newCustomer, address: e.target.value })}
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   placeholder="123 Main St"
                 />
@@ -248,8 +305,8 @@ const Customers = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
                 <input
                   type="text"
-                  value={newCustomer.city}
-                  onChange={(e) => setNewCustomer({ ...newCustomer, city: e.target.value })}
+                  value={form.city}
+                  onChange={(e) => setForm({ ...form, city: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   placeholder="Mumbai"
                 />
@@ -258,17 +315,17 @@ const Customers = () => {
               <div className="flex justify-end gap-3 mt-6 pt-4 border-t">
                 <button
                   type="button"
-                  onClick={() => setIsAddModalOpen(false)}
+                  onClick={closeModal}
                   className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={adding}
+                  disabled={saving}
                   className="px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition disabled:bg-indigo-400"
                 >
-                  {adding ? 'Saving...' : 'Save Customer'}
+                  {saving ? 'Saving...' : 'Save Customer'}
                 </button>
               </div>
             </form>
