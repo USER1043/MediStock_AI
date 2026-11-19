@@ -243,7 +243,7 @@ export const saveDemandParameters = async (req, res) => {
         const params = await ForecastParameters.findOneAndUpdate(
             {},
             updates,
-            { new: true, upsert: true, setDefaultsOnInsert: true, lean: true }
+            { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true, lean: true }
         );
         res.status(200).json({ success: true, parameters: params });
     } catch (error) {
