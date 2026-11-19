@@ -1,7 +1,7 @@
 import { Alert } from '../models/alertModel.js';
 import { Medicine } from '../models/medicineModel.js';
 import { InventoryHistory } from '../models/inventoryHistoryModel.js';
-import { isNearExpiry, isExpired } from '../utils/helpers.js';
+import { getExpiringBatches, describeBatches } from '../utils/helpers.js';
 import log from '../utils/logger.js';
 
 // Generate alerts
@@ -35,8 +35,11 @@ export const generateAlerts = async (req, res) => {
         }
       }
 
+      // Expiry is tracked per batch, so check every batch still in stock
+      const { nearExpiry, expired } = getExpiringBatches(medicine.batches, 7);
+
       // Near expiry alert
-      if (isNearExpiry(medicine.expiryDate, 7)) {
+      if (nearExpiry.length > 0) {
         const existingAlert = await Alert.findOne({
           medicineId: medicine._id,
           alertType: 'near_expiry',
@@ -48,7 +51,7 @@ export const generateAlerts = async (req, res) => {
             medicineId: medicine._id,
             medicineName: medicine.name,
             alertType: 'near_expiry',
-            message: `Medicine expiring soon. Expiry Date: ${medicine.expiryDate}`,
+            message: `Batches expiring within 7 days: ${describeBatches(nearExpiry)}`,
             severity: 'warning',
           });
           alerts.push(alert);
@@ -56,7 +59,7 @@ export const generateAlerts = async (req, res) => {
       }
 
       // Expired alert
-      if (isExpired(medicine.expiryDate)) {
+      if (expired.length > 0) {
         const existingAlert = await Alert.findOne({
           medicineId: medicine._id,
           alertType: 'expired',
@@ -68,7 +71,7 @@ export const generateAlerts = async (req, res) => {
             medicineId: medicine._id,
             medicineName: medicine.name,
             alertType: 'expired',
-            message: `Medicine has expired. Expiry Date: ${medicine.expiryDate}`,
+            message: `Expired batches still in stock: ${describeBatches(expired)}`,
             severity: 'critical',
           });
           alerts.push(alert);

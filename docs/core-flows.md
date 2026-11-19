@@ -220,11 +220,11 @@ Expected columns: `name, category, batchNumber, expiryDate, quantity, rackNumber
 | Type | Condition | Severity |
 |------|-----------|----------|
 | `low_stock` | `quantity ≤ reorderLevel / 2` | critical |
-| `near_expiry` | expiry within 7 days | warning |
-| `expired` | expiry passed | critical |
+| `near_expiry` | any batch with stock left expires within 7 days | warning |
+| `expired` | any batch with stock left is past its expiry date | critical |
 | `overstock` | `quantity > 3 × reorderLevel` | info |
 
-Alerts older than 24 hours are deleted on each run. Generation is triggered by the client; there is no background schedule.
+Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batches with no stock left are ignored, and the alert message lists each affected batch with its expiry, rack and quantity. Alerts older than 24 hours are deleted on each run. Generation is triggered by the client; there is no background schedule.
 
 ---
 
@@ -240,7 +240,6 @@ Alerts older than 24 hours are deleted on each run. Generation is triggered by t
 - **Billing atomicity depends on the MongoDB topology.** On a replica set (e.g. Atlas) a bill runs in a transaction. On a standalone server (e.g. the local Docker setup) it falls back to a compensating rollback, which restores each medicine's saved `batches` wholesale and could overwrite a change made by another request in between.
 - **The `__v` concurrency check only catches writers that bump `__v`.** `createBill` and `adjustQuantity` do; plain `findByIdAndUpdate` calls (e.g. `updateMedicine`) don't. The `quantity ≥ qty` filter still prevents overselling.
 - **Transaction write conflicts return 500.** When two bills collide inside transactions, MongoDB's `WriteConflict` error surfaces as a 500 rather than the 409 "please retry" response.
-- **Near-expiry and expired alerts don't fire.** `generateAlerts` checks `medicine.expiryDate`, but expiry lives on each batch. Only `low_stock` and `overstock` alerts are produced.
 - **Rule-based reorder can fail on zero stock.** `generateReorderSuggestions` sets priority `'Critical'`, which isn't in the PO `priority` enum (`Low | Medium | High`), so `PurchaseOrder.create` throws a validation error for out-of-stock medicines.
 - **Received batches get a fake expiry** (now + 1 year) and rack `'Receiving Area'` until someone edits them.
 
