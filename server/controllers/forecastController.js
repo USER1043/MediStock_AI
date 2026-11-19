@@ -236,48 +236,80 @@ const notAReviewableDraft = (res, order) =>
         errorCode: 'NOT_A_DRAFT'
     });
 
+const PO_PRIORITIES = ['Low', 'Medium', 'High'];
+
+// A quantity is absent (undefined, null or ''), or a positive whole number (a number or a numeric string, as
+// the edit form posts it). Returns { qty } (null when absent) or { error } for anything else.
+const parseQuantity = (value, field) => {
+    if (value === undefined || value === null || value === '') return { qty: null };
+    const qty = typeof value === 'number' ? value : typeof value === 'string' && /^\s*\d+\s*$/.test(value) ? Number(value) : NaN;
+    if (!Number.isSafeInteger(qty) || qty < 1) return { error: `${field} must be a positive whole number` };
+    return { qty };
+};
+
+const invalidUpdate = (res, message) => res.status(400).json({ success: false, message, errorCode: 'INVALID_INPUT' });
+
 export const updateRecommendation = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, approvedQty, optimalReorderQty, priority, restockingDate } = req.body;
+        const { status, approvedQty, optimalReorderQty, priority, restockingDate } = req.body || {};
 
-        const draft = mongoose.isValidObjectId(id) ? await PurchaseOrder.findById(id) : null;
-        if (!draft) return res.status(404).json({ success: false, message: 'Recommendation not found' });
-        if (!REVIEWABLE_STATUSES.includes(draft.order_status)) return notAReviewableDraft(res, draft);
+        // Validate the body first; nothing is read or written until it is known to be good
+        const approved = parseQuantity(approvedQty, 'approvedQty');
+        const optimal = parseQuantity(optimalReorderQty, 'optimalReorderQty');
+        if (approved.error || optimal.error) return invalidUpdate(res, approved.error || optimal.error);
+        if (status !== undefined && status !== null && status !== '' &&
+            !['approved', 'rejected', 'adjusted', 'pending'].includes(status)) {
+            return invalidUpdate(res, 'status must be one of approved, rejected, adjusted or pending');
+        }
+
+        const $set = {};
+        // Approving takes the approved quantity first; every other change takes the reorder quantity first
+        const qty = status === 'approved' ? approved.qty ?? optimal.qty : optimal.qty ?? approved.qty;
 
         if (status === 'approved') {
-            draft.order_status = 'Pending';
-            if (approvedQty || optimalReorderQty) {
-                draft.requested_quantity = approvedQty || optimalReorderQty;
-                draft.total_amount = draft.requested_quantity * draft.unit_price;
-            }
-            draft.approved_by = req.user.id;
+            $set.order_status = { $literal: 'Pending' };
+            $set.approved_by = { $literal: new mongoose.Types.ObjectId(req.user.id) };
         } else if (status === 'rejected') {
-            draft.order_status = 'Cancelled';
-        } else if (status === 'adjusted') {
-            draft.order_status = 'Adjusted';
-            if (optimalReorderQty || approvedQty) {
-                draft.requested_quantity = optimalReorderQty || approvedQty;
-                draft.total_amount = draft.requested_quantity * draft.unit_price;
-            }
-        } else if (status === 'pending') {
-            if (optimalReorderQty || approvedQty) {
-                draft.requested_quantity = optimalReorderQty || approvedQty;
-                draft.total_amount = draft.requested_quantity * draft.unit_price;
-            }
+            $set.order_status = { $literal: 'Cancelled' };
+        } else if (status === 'adjusted' || (qty !== null && !status)) {
+            // A quantity change with no status is an adjustment too
+            $set.order_status = { $literal: 'Adjusted' };
+        }
+        // status 'pending' (or none, without a quantity) leaves the status as it is
+
+        if (qty !== null) {
+            $set.requested_quantity = { $literal: qty };
+            $set.total_amount = { $multiply: [{ $literal: qty }, '$unit_price'] };
         }
 
         if (priority) {
-            const capPriority = priority.charAt(0).toUpperCase() + priority.slice(1).toLowerCase();
-            if (!draft.ai_forecast_reference) draft.ai_forecast_reference = {};
-            draft.ai_forecast_reference.priority = capPriority;
+            const capPriority = String(priority).charAt(0).toUpperCase() + String(priority).slice(1).toLowerCase();
+            if (!PO_PRIORITIES.includes(capPriority)) return invalidUpdate(res, 'priority must be low, medium or high');
+            $set['ai_forecast_reference.priority'] = { $literal: capPriority };
         }
 
         if (restockingDate) {
-            draft.expected_delivery_date = new Date(restockingDate);
+            const date = new Date(restockingDate);
+            if (Number.isNaN(date.getTime())) return invalidUpdate(res, 'restockingDate is not a valid date');
+            $set.expected_delivery_date = { $literal: date };
         }
 
-        await draft.save();
+        // One atomic step, filtered on the statuses a draft may be in: an approve, reject or adjust that races
+        // with another one cannot both win, because the loser no longer matches. (Plain save() would have
+        // written over whatever the other request did.)
+        const filter = mongoose.isValidObjectId(id) ? { _id: id, order_status: { $in: REVIEWABLE_STATUSES } } : null;
+        let draft = null;
+        if (filter) {
+            draft = Object.keys($set).length
+                ? await PurchaseOrder.findOneAndUpdate(filter, [{ $set }], { returnDocument: 'after', updatePipeline: true })
+                : await PurchaseOrder.findOne(filter); // nothing to change; still a draft?
+        }
+        if (!draft) {
+            const existing = filter ? await PurchaseOrder.findById(id).select('order_status').lean() : null;
+            if (!existing) return res.status(404).json({ success: false, message: 'Recommendation not found' });
+            return notAReviewableDraft(res, existing);
+        }
 
         res.status(200).json({ success: true, message: 'Recommendation updated', recommendation: draft });
     } catch (error) {
