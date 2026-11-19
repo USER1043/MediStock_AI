@@ -12,18 +12,7 @@ import { errorHandler, notFound, requestLogger } from './middleware/errorHandler
 import boxen from 'boxen';
 
 // Import routes
-import authRoutes from './routes/authRoutes.js';
-import inventoryRoutes from './routes/inventoryRoutes.js';
-import billingRoutes from './routes/billingRoutes.js';
-import customerRoutes from './routes/customerRoutes.js';
-import alertRoutes from './routes/alertRoutes.js';
-import uploadRoutes from './routes/uploadRoutes.js';
-import reportRoutes from './routes/reportRoutes.js';
-import chatbotRoutes from './routes/chatbotRoutes.js';
-import supplierRoutes from './routes/supplierRoutes.js';
-import categoryRoutes from './routes/categoryRoutes.js';
-import auditRoutes from './routes/auditRoutes.js';
-import forecastRoutes from './routes/forecastRoutes.js';
+import { mountApiRouters } from './routes/index.js';
 import { auditLogger } from './middleware/auditLogger.js';
 import { markAlertsStaleOnWrite } from './services/alertService.js';
 
@@ -62,18 +51,7 @@ app.use(auditLogger);  // async fire-and-forget — logs after response is sent
 // Stock-changing requests make stored alerts stale, so the next alert read regenerates them
 app.use(['/api/inventory', '/api/billing', '/api/uploads', '/api/suppliers'], markAlertsStaleOnWrite());
 
-app.use('/api/auth', authRoutes);
-app.use('/api/audit', auditRoutes);
-app.use('/api/inventory', inventoryRoutes);
-app.use('/api/billing', billingRoutes);
-app.use('/api/customers', customerRoutes);
-app.use('/api/alerts', alertRoutes);
-app.use('/api/uploads', uploadRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/chatbot', chatbotRoutes);
-app.use('/api/suppliers', supplierRoutes);
-app.use('/api/categories', categoryRoutes);
-app.use('/api/forecast', forecastRoutes);
+mountApiRouters(app); // /api/auth, /api/inventory, ... (see routes/index.js)
 
 // Serves uploaded files securely with defensive browser execution controls.
 app.use('/uploads', express.static('uploads', {

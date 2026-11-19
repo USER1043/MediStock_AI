@@ -2,7 +2,7 @@ import XLSX from 'xlsx';
 import fs from 'fs';
 import { Medicine } from '../models/medicineModel.js';
 import { AuditLog } from '../models/auditLogModel.js';
-import { detectAnomalies, addStockToBatches } from '../utils/helpers.js';
+import { detectAnomalies, addStockToBatches, requestPath } from '../utils/helpers.js';
 import log from '../utils/logger.js';
 
 // Upload Excel file
@@ -91,7 +91,7 @@ export const uploadExcel = async (req, res) => {
       },
       ipAddress: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown',
       httpMethod: 'POST',
-      endpoint: req.path,
+      endpoint: requestPath(req), // the audit middleware skips this route, so this is the only entry
       statusCode: 200,
     });
 
