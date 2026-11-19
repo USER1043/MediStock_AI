@@ -116,7 +116,7 @@ const Inventory = () => {
                   <td className="px-6 py-4 text-sm font-semibold">{medicine.quantity}</td>
                   <td className="px-6 py-4 text-sm font-mono font-semibold">{primaryBatch.rackNumber || 'N/A'}</td>
                   <td className="px-6 py-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${STOCK_LEVEL_META[stockStatus.status].badge}`}>
+                    <span className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${STOCK_LEVEL_META[stockStatus.status].badge}`}>
                       {stockStatus.label}
                     </span>
                   </td>
