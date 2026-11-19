@@ -5,6 +5,7 @@
 import { Bill } from '../models/billModel.js';
 import { InventoryHistory } from '../models/inventoryHistoryModel.js';
 import { lstmForecast } from './lstmModel.js';
+import { isLowStock } from '../utils/stockLevel.js';
 
 /**
  * Holt-Winters Double Exponential Smoothing (Trend-adjusted)
@@ -110,7 +111,7 @@ export const classifyMedicineMovements = (series, currentStock, reorderLevel) =>
 
     let priority = 'medium';
     if (movement === 'fast_moving') priority = 'high';
-    if (currentStock <= reorderLevel) priority = 'high';
+    if (isLowStock(currentStock, reorderLevel)) priority = 'high';
     if (movement === 'slow_moving' && currentStock > reorderLevel * 2) priority = 'low';
 
     return { movement, priority };

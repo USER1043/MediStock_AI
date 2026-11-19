@@ -13,6 +13,9 @@ import { Bill } from "../models/billModel.js";
 import { InventoryHistory } from "../models/inventoryHistoryModel.js";
 import { AuditLog } from "../models/auditLogModel.js";
 import { Alert } from "../models/alertModel.js";
+import { getStockStatus } from "../utils/helpers.js";
+import { isMedicineLowStock } from "../utils/stockLevel.js";
+import { lowStockCondition } from "../services/alertService.js";
 import { Report } from "../models/reportModel.js";
 import { Supplier, PurchaseOrder } from "../models/supplierModels.js";
 import { createSeedClock } from "./seedClock.js";
@@ -240,7 +243,6 @@ const seedDatabase = async () => {
         reorderLevel: 100,
         purchasePrice: 5,
         sellingPrice: 10,
-        stockStatus: "high",
         supplier: "MedSupply India",
       },
       {
@@ -258,7 +260,6 @@ const seedDatabase = async () => {
         reorderLevel: 100,
         purchasePrice: 15,
         sellingPrice: 30,
-        stockStatus: "low",
         supplier: "MedSupply India",
       },
       {
@@ -276,7 +277,6 @@ const seedDatabase = async () => {
         reorderLevel: 80,
         purchasePrice: 2,
         sellingPrice: 5,
-        stockStatus: "high",
         supplier: "HealthCare Solutions",
       },
       {
@@ -294,7 +294,6 @@ const seedDatabase = async () => {
         reorderLevel: 100,
         purchasePrice: 8,
         sellingPrice: 18,
-        stockStatus: "medium",
         supplier: "PharmaHub Distributors",
       },
       {
@@ -312,7 +311,6 @@ const seedDatabase = async () => {
         reorderLevel: 50,
         purchasePrice: 12,
         sellingPrice: 25,
-        stockStatus: "high",
         supplier: "HealthCare Solutions",
       },
       {
@@ -330,7 +328,6 @@ const seedDatabase = async () => {
         reorderLevel: 100,
         purchasePrice: 6,
         sellingPrice: 12,
-        stockStatus: "low",
         supplier: "MedSupply India",
       },
       {
@@ -348,7 +345,6 @@ const seedDatabase = async () => {
         reorderLevel: 100,
         purchasePrice: 3,
         sellingPrice: 8,
-        stockStatus: "high",
         supplier: "PharmaHub Distributors",
       },
       {
@@ -366,7 +362,6 @@ const seedDatabase = async () => {
         reorderLevel: 50,
         purchasePrice: 20,
         sellingPrice: 45,
-        stockStatus: "low",
         supplier: "PharmaHub Distributors",
       },
       {
@@ -384,7 +379,6 @@ const seedDatabase = async () => {
         reorderLevel: 50,
         purchasePrice: 4,
         sellingPrice: 10,
-        stockStatus: "high",
         supplier: "HealthCare Solutions",
       },
       {
@@ -402,7 +396,6 @@ const seedDatabase = async () => {
         reorderLevel: 100,
         purchasePrice: 15,
         sellingPrice: 35,
-        stockStatus: "high",
         supplier: "Apollo MedSource",
       },
       {
@@ -420,7 +413,6 @@ const seedDatabase = async () => {
         reorderLevel: 80,
         purchasePrice: 12,
         sellingPrice: 28,
-        stockStatus: "high",
         supplier: "Apollo MedSource",
       },
       {
@@ -438,13 +430,13 @@ const seedDatabase = async () => {
         reorderLevel: 30,
         purchasePrice: 40,
         sellingPrice: 85,
-        stockStatus: "medium",
         supplier: "MedSupply India",
       },
     ];
 
     const mappedMedicines = medicineData.map((m) => ({
       ...m,
+      stockStatus: getStockStatus(m.quantity, m.reorderLevel),
       supplier: supplierMap[m.supplier]
         ? String(supplierMap[m.supplier])
         : m.supplier,
@@ -591,15 +583,18 @@ const seedDatabase = async () => {
 
     const alerts = [];
     const notifications = [];
-    const lowStockMeds = medicines.filter((m) => m.quantity <= m.reorderLevel);
+    const lowStockMeds = medicines.filter(isMedicineLowStock);
 
     for (const med of lowStockMeds) {
+      // Same alert the alert service would raise (message, severity, fingerprint)
+      const { alertType, message, severity, fingerprint } = lowStockCondition(med);
       const alertDoc = await Alert.create({
         medicineId: med._id,
         medicineName: med.name,
-        alertType: "low_stock",
-        message: `Stock for ${med.name} is critically low (${med.quantity} remaining).`,
-        severity: med.quantity < med.reorderLevel / 2 ? "critical" : "warning",
+        alertType,
+        message,
+        severity,
+        fingerprint,
       });
       alerts.push(alertDoc);
 

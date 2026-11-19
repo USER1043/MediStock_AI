@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import axiosInstance from '../utils/axiosConfig';
+import { getStockLevel, STOCK_LEVEL_META } from '../utils/stockLevel';
 import { useAuth } from '../context/AuthContext';
 import {
   LineChart,
@@ -522,8 +523,8 @@ export default function Dashboard() {
                       className="flex items-center justify-between bg-red-50 rounded-lg px-3 py-2"
                     >
                       <span className="text-sm font-medium text-gray-800">{m.name}</span>
-                      <span className="text-xs text-red-600 font-semibold bg-red-100 px-2 py-0.5 rounded-full">
-                        {m.quantity} / {m.reorderLevel} units
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${STOCK_LEVEL_META[m.stockLevel ?? getStockLevel(m.quantity, m.reorderLevel)].badge}`}>
+                        {STOCK_LEVEL_META[m.stockLevel ?? getStockLevel(m.quantity, m.reorderLevel)].label} · {m.quantity} / {m.reorderLevel} units
                       </span>
                     </div>
                   ))}

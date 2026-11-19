@@ -8,6 +8,7 @@ import {
   addStockToBatches,
 } from '../utils/helpers.js';
 import log from '../utils/logger.js';
+import { isMedicineLowStock, sortByUrgency, stockLevelOf } from '../utils/stockLevel.js';
 import { resolveSupplierId, isBlankSupplier } from '../utils/supplierRef.js';
 
 // Get all medicines
@@ -368,9 +369,10 @@ export const searchMedicines = async (req, res) => {
 // Get low stock medicines
 export const getLowStockMedicines = async (req, res) => {
   try {
-    const medicines = await Medicine.find({
-      $expr: { $lte: ['$quantity', '$reorderLevel'] },
-    }).lean();
+    // At or below reorder level (utils/stockLevel.js), most urgent first. Filtered in JS rather
+    // than with $expr so missing/zero reorder levels and odd quantities follow the shared rule.
+    const all = await Medicine.find().lean();
+    const medicines = sortByUrgency(all.filter(isMedicineLowStock)).map((m) => ({ ...m, stockLevel: stockLevelOf(m) }));
 
     res.status(200).json({
       success: true,
@@ -610,15 +612,20 @@ export const getInventoryIntelligence = async (req, res) => {
         slowMoving.push(label);
       }
 
-      if (medicine.quantity <= medicine.reorderLevel / 2) {
-        critical.push(`${medicine.name} — only ${medicine.quantity} left (reorder: ${medicine.reorderLevel})`);
+      const level = stockLevelOf(medicine);
+      if (level === 'out' || level === 'critical') {
+        critical.push(
+          level === 'out'
+            ? `${medicine.name} — out of stock (reorder level ${medicine.reorderLevel})`
+            : `${medicine.name} — only ${medicine.quantity} left (reorder level ${medicine.reorderLevel})`
+        );
         recommendations.push({
           medicine: medicine.name,
           action: 'Order Immediately',
           quantity: medicine.reorderLevel * 2 - medicine.quantity,
           priority: 'high',
         });
-      } else if (medicine.quantity <= medicine.reorderLevel) {
+      } else if (level === 'low') {
         recommendations.push({
           medicine: medicine.name,
           action: 'Order Soon',

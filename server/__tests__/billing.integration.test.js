@@ -59,7 +59,7 @@ const createMedicine = (overrides = {}) =>
     reorderLevel: 10,
     purchasePrice: 2,
     sellingPrice: 5,
-    stockStatus: 'high',
+    stockStatus: 'ok',
     batches: [
       { batchNumber: 'B-LATE', expiryDate: daysFromNow(365), quantity: 10, rackNumber: 'R1' },
       { batchNumber: 'B-SOON', expiryDate: daysFromNow(30), quantity: 5, rackNumber: 'R2' },
@@ -122,7 +122,7 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
       expect(updated.quantity).toBe(8);
       expect(batchQty(updated, 'B-SOON')).toBe(0);
       expect(batchQty(updated, 'B-LATE')).toBe(8);
-      expect(updated.stockStatus).toBe('medium');
+      expect(updated.stockStatus).toBe('low'); // 8 against reorder level 10
       expect(updated.__v).toBe(med.__v + 1);
 
       const history = await InventoryHistory.find({ action: 'sale' });
@@ -172,7 +172,7 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
       expect(afterA.quantity).toBe(15);
       expect(batchQty(afterA, 'B-SOON')).toBe(5);
       expect(batchQty(afterA, 'B-LATE')).toBe(10);
-      expect(afterA.stockStatus).toBe('high');
+      expect(afterA.stockStatus).toBe('ok');
 
       expect(await InventoryHistory.countDocuments()).toBe(0);
       expect(await Bill.countDocuments()).toBe(0);
@@ -403,7 +403,7 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
       const after = await Medicine.findById(med._id);
       expect(after.batches.id(late._id).quantity).toBe(4);
       expect(after.quantity).toBe(9);
-      expect(after.stockStatus).toBe('medium');
+      expect(after.stockStatus).toBe('low'); // 9 against reorder level 10
 
       const history = await InventoryHistory.find({ action: 'adjustment' });
       expect(history).toHaveLength(1);
@@ -418,8 +418,8 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
       expect(res.statusCode).toBe(200);
       const after = await Medicine.findById(med._id);
       expect(after).toMatchObject({ sellingPrice: 6.5, category: 'Pain Relief', reorderLevel: 40, quantity: 15 });
-      // stockStatus follows the new reorder level
-      expect(after.stockStatus).toBe('low');
+      // stockStatus follows the new reorder level: 15 <= 40 / 2
+      expect(after.stockStatus).toBe('critical');
     });
 
     test('rejects a stale version with 409 and changes nothing', async () => {

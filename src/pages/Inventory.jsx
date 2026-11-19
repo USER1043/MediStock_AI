@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import axiosInstance from '../utils/axiosConfig';
 import { getExpiryStatus, getStockStatus, filterMedicines, sortByFEFO } from '../utils/helpers';
+import { STOCK_LEVEL_META } from '../utils/stockLevel';
 import { FaSearch, FaSort } from 'react-icons/fa';
 
 // Renders inventory management view.
@@ -115,10 +116,7 @@ const Inventory = () => {
                   <td className="px-6 py-4 text-sm font-semibold">{medicine.quantity}</td>
                   <td className="px-6 py-4 text-sm font-mono font-semibold">{primaryBatch.rackNumber || 'N/A'}</td>
                   <td className="px-6 py-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${stockStatus.color === 'red' ? 'bg-red-100 text-red-700' :
-                      stockStatus.color === 'yellow' ? 'bg-yellow-100 text-yellow-700' :
-                        'bg-green-100 text-green-700'
-                      }`}>
+                    <span className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${STOCK_LEVEL_META[stockStatus.status].badge}`}>
                       {stockStatus.label}
                     </span>
                   </td>
