@@ -149,14 +149,9 @@ export const getRecommendations = async (req, res) => {
         }).populate('supplier_id').populate('medicine_id').sort({ createdAt: -1 });
 
         const mapped = purchaseOrders.map(r => {
-            let status = 'pending';
-            if (r.order_status === 'Adjusted') {
-                status = 'adjusted';
-            } else if (r.order_status === 'Pending' || r.order_status === 'Approved' || r.order_status === 'Ordered') {
-                status = 'approved';
-            } else if (r.order_status === 'Cancelled') {
-                status = 'rejected';
-            }
+            // Review label: new (untouched forecast draft), adjusted (edited by a person), rejected, or
+            // approved (it became a real purchase order, whatever stage that order has reached since)
+            const status = { AI_Draft: 'new', Adjusted: 'adjusted', Cancelled: 'rejected' }[r.order_status] || 'approved';
 
             const priorityRaw = r.ai_forecast_reference?.priority || 'Medium';
             const priority = priorityRaw.toLowerCase();
@@ -236,48 +231,78 @@ const notAReviewableDraft = (res, order) =>
         errorCode: 'NOT_A_DRAFT'
     });
 
+const PO_PRIORITIES = ['Low', 'Medium', 'High'];
+
+// A quantity is absent (undefined, null or ''), or a positive whole number (a number or a numeric string, as
+// the edit form posts it). Returns { qty } (null when absent) or { error } for anything else.
+const parseQuantity = (value, field) => {
+    if (value === undefined || value === null || value === '') return { qty: null };
+    const qty = typeof value === 'number' ? value : typeof value === 'string' && /^\s*\d+\s*$/.test(value) ? Number(value) : NaN;
+    if (!Number.isSafeInteger(qty) || qty < 1) return { error: `${field} must be a positive whole number` };
+    return { qty };
+};
+
+const invalidUpdate = (res, message) => res.status(400).json({ success: false, message, errorCode: 'INVALID_INPUT' });
+
+// PUT body: { status?, quantity?, priority?, restockingDate? }
+//   status 'approved' -> Pending (a real purchase order; any edits in the same request are applied first)
+//   status 'rejected' -> Cancelled (takes no edits)
+//   no status         -> the edits are applied and the draft becomes Adjusted
 export const updateRecommendation = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, approvedQty, optimalReorderQty, priority, restockingDate } = req.body;
+        const { status, quantity, priority, restockingDate } = req.body || {};
 
-        const draft = mongoose.isValidObjectId(id) ? await PurchaseOrder.findById(id) : null;
-        if (!draft) return res.status(404).json({ success: false, message: 'Recommendation not found' });
-        if (!REVIEWABLE_STATUSES.includes(draft.order_status)) return notAReviewableDraft(res, draft);
+        // Validate the body first; nothing is read or written until it is known to be good
+        if (status !== undefined && !['approved', 'rejected'].includes(status)) {
+            return invalidUpdate(res, 'status must be approved or rejected (leave it out to adjust the draft)');
+        }
+        const { qty, error: qtyError } = parseQuantity(quantity, 'quantity');
+        if (qtyError) return invalidUpdate(res, qtyError);
+        const hasEdits = qty !== null || Boolean(priority) || Boolean(restockingDate);
+        if (status === 'rejected' && hasEdits) return invalidUpdate(res, 'a rejection takes no other changes');
+        if (!status && !hasEdits) return invalidUpdate(res, 'nothing to update');
 
+        const $set = {};
         if (status === 'approved') {
-            draft.order_status = 'Pending';
-            if (approvedQty || optimalReorderQty) {
-                draft.requested_quantity = approvedQty || optimalReorderQty;
-                draft.total_amount = draft.requested_quantity * draft.unit_price;
-            }
-            draft.approved_by = req.user.id;
+            $set.order_status = { $literal: 'Pending' };
+            $set.approved_by = { $literal: new mongoose.Types.ObjectId(req.user.id) };
         } else if (status === 'rejected') {
-            draft.order_status = 'Cancelled';
-        } else if (status === 'adjusted') {
-            draft.order_status = 'Adjusted';
-            if (optimalReorderQty || approvedQty) {
-                draft.requested_quantity = optimalReorderQty || approvedQty;
-                draft.total_amount = draft.requested_quantity * draft.unit_price;
-            }
-        } else if (status === 'pending') {
-            if (optimalReorderQty || approvedQty) {
-                draft.requested_quantity = optimalReorderQty || approvedQty;
-                draft.total_amount = draft.requested_quantity * draft.unit_price;
-            }
+            $set.order_status = { $literal: 'Cancelled' };
+        } else {
+            $set.order_status = { $literal: 'Adjusted' };
+        }
+
+        if (qty !== null) {
+            $set.requested_quantity = { $literal: qty };
+            $set.total_amount = { $multiply: [{ $literal: qty }, '$unit_price'] };
         }
 
         if (priority) {
-            const capPriority = priority.charAt(0).toUpperCase() + priority.slice(1).toLowerCase();
-            if (!draft.ai_forecast_reference) draft.ai_forecast_reference = {};
-            draft.ai_forecast_reference.priority = capPriority;
+            const capPriority = String(priority).charAt(0).toUpperCase() + String(priority).slice(1).toLowerCase();
+            if (!PO_PRIORITIES.includes(capPriority)) return invalidUpdate(res, 'priority must be low, medium or high');
+            $set['ai_forecast_reference.priority'] = { $literal: capPriority };
         }
 
         if (restockingDate) {
-            draft.expected_delivery_date = new Date(restockingDate);
+            const date = new Date(restockingDate);
+            if (Number.isNaN(date.getTime())) return invalidUpdate(res, 'restockingDate is not a valid date');
+            $set.expected_delivery_date = { $literal: date };
         }
 
-        await draft.save();
+        // One atomic step, filtered on the statuses a draft may be in: an approve, reject or adjust that races
+        // with another one cannot both win, because the loser no longer matches. (Plain save() would have
+        // written over whatever the other request did.)
+        const filter = mongoose.isValidObjectId(id) ? { _id: id, order_status: { $in: REVIEWABLE_STATUSES } } : null;
+        let draft = null;
+        if (filter) {
+            draft = await PurchaseOrder.findOneAndUpdate(filter, [{ $set }], { returnDocument: 'after', updatePipeline: true });
+        }
+        if (!draft) {
+            const existing = filter ? await PurchaseOrder.findById(id).select('order_status').lean() : null;
+            if (!existing) return res.status(404).json({ success: false, message: 'Recommendation not found' });
+            return notAReviewableDraft(res, existing);
+        }
 
         res.status(200).json({ success: true, message: 'Recommendation updated', recommendation: draft });
     } catch (error) {

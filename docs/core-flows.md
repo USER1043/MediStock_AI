@@ -124,7 +124,7 @@ sequenceDiagram
     FR->>API: GET /api/forecast/recommendations
     API-->>FR: drafts mapped to {predictedDemand, optimalReorderQty, priority, status}
     O->>FR: Adjust qty (staff or owner); approve / reject / delete (owner only)
-    FR->>API: PUT /api/forecast/recommendations/:id {status, qty, priority}
+    FR->>API: PUT /api/forecast/recommendations/:id {status?: approved or rejected, quantity?, priority?}
     API->>DB: AI_Draft or Adjusted → Pending / Adjusted / Cancelled (other POs: 409)
 ```
 
