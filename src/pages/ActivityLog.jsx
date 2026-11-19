@@ -17,49 +17,57 @@ import {
     FaDownload,
 } from 'react-icons/fa';
 
-// ── Action badge colours ─────────────────────────────────────────
-const ACTION_STYLES = {
-    USER_LOGIN: { bg: 'bg-blue-100', text: 'text-blue-700' },
-    USER_CREATED: { bg: 'bg-green-100', text: 'text-green-700' },
-    USER_UPDATED: { bg: 'bg-yellow-100', text: 'text-yellow-700' },
-    USER_DELETED: { bg: 'bg-red-100', text: 'text-red-700' },
-    EXCEL_UPLOAD: { bg: 'bg-purple-100', text: 'text-purple-700' },
-    BILL_GENERATED: { bg: 'bg-emerald-100', text: 'text-emerald-700' },
-    STOCK_UPDATE: { bg: 'bg-cyan-100', text: 'text-cyan-700' },
-    MEDICINE_CREATED: { bg: 'bg-teal-100', text: 'text-teal-700' },
-    MEDICINE_DELETED: { bg: 'bg-red-100', text: 'text-red-700' },
-    ALERT_RESOLVED: { bg: 'bg-orange-100', text: 'text-orange-700' },
-    SUPPLIER_CREATED: { bg: 'bg-indigo-100', text: 'text-indigo-700' },
-    ORDER_CREATED: { bg: 'bg-violet-100', text: 'text-violet-700' },
-    ORDER_STATUS_UPDATE: { bg: 'bg-fuchsia-100', text: 'text-fuchsia-700' },
-    REORDER_APPROVED: { bg: 'bg-lime-100', text: 'text-lime-700' },
-    DELETE: { bg: 'bg-red-200', text: 'text-red-800' },
-    OTHER: { bg: 'bg-gray-100', text: 'text-gray-600' },
-};
-
-const MODULE_OPTIONS = [
-    'Inventory', 'Billing', 'UserManagement', 'DataImport',
-    'Alerts', 'Orders', 'Suppliers', 'System',
+// ── Audit actions and modules ───────────────────────────────────
+// Keep in step with AUDIT_ACTIONS / AUDIT_MODULES in server/models/auditLogModel.js.
+// Older values (e.g. the generic DELETE) stay so existing entries still render.
+const ACTION_OPTIONS = [
+    // Users
+    { value: 'USER_LOGIN', label: '🔑 User Login', bg: 'bg-blue-100', text: 'text-blue-700' },
+    { value: 'USER_CREATED', label: '👤 User Created', bg: 'bg-green-100', text: 'text-green-700' },
+    { value: 'USER_UPDATED', label: '✏️ User Updated', bg: 'bg-yellow-100', text: 'text-yellow-700' },
+    { value: 'USER_DELETED', label: '🗑️ User Deleted', bg: 'bg-red-100', text: 'text-red-700' },
+    { value: 'TWO_FA_ENABLED', label: '🛡️ 2FA Enabled', bg: 'bg-blue-100', text: 'text-blue-700' },
+    // Inventory
+    { value: 'MEDICINE_CREATED', label: '💊 Medicine Created', bg: 'bg-teal-100', text: 'text-teal-700' },
+    { value: 'MEDICINE_UPDATED', label: '📝 Medicine Updated', bg: 'bg-teal-100', text: 'text-teal-700' },
+    { value: 'MEDICINE_DELETED', label: '❌ Medicine Deleted', bg: 'bg-red-100', text: 'text-red-700' },
+    { value: 'STOCK_UPDATE', label: '📦 Stock Update', bg: 'bg-cyan-100', text: 'text-cyan-700' },
+    { value: 'EXCEL_UPLOAD', label: '📤 Excel Bulk Upload', bg: 'bg-purple-100', text: 'text-purple-700' },
+    // Billing
+    { value: 'BILL_GENERATED', label: '🧾 Bill Generated', bg: 'bg-emerald-100', text: 'text-emerald-700' },
+    { value: 'PAYMENT_CONFIRMED', label: '💳 Payment Confirmed', bg: 'bg-emerald-100', text: 'text-emerald-700' },
+    // Customers
+    { value: 'CUSTOMER_CREATED', label: '🧑 Customer Created', bg: 'bg-sky-100', text: 'text-sky-700' },
+    { value: 'CUSTOMER_UPDATED', label: '✏️ Customer Updated', bg: 'bg-sky-100', text: 'text-sky-700' },
+    { value: 'CUSTOMER_DELETED', label: '🗑️ Customer Deleted', bg: 'bg-red-100', text: 'text-red-700' },
+    // Suppliers and orders
+    { value: 'SUPPLIER_CREATED', label: '🏭 Supplier Created', bg: 'bg-indigo-100', text: 'text-indigo-700' },
+    { value: 'SUPPLIER_UPDATED', label: '🏭 Supplier Updated', bg: 'bg-indigo-100', text: 'text-indigo-700' },
+    { value: 'REORDER_GENERATED', label: '📋 Reorders Generated', bg: 'bg-violet-100', text: 'text-violet-700' },
+    { value: 'ORDER_CREATED', label: '🛒 Order Created', bg: 'bg-violet-100', text: 'text-violet-700' },
+    { value: 'ORDER_STATUS_UPDATE', label: '🔄 Order Status Update', bg: 'bg-fuchsia-100', text: 'text-fuchsia-700' },
+    // Categories
+    { value: 'CATEGORY_CREATED', label: '🏷️ Category Created', bg: 'bg-amber-100', text: 'text-amber-700' },
+    { value: 'CATEGORY_APPROVED', label: '🏷️ Category Approved', bg: 'bg-amber-100', text: 'text-amber-700' },
+    // Forecasting
+    { value: 'FORECAST_RUN', label: '📈 Forecast Run', bg: 'bg-lime-100', text: 'text-lime-700' },
+    { value: 'MODEL_RETRAINED', label: '🧠 Model Retrained', bg: 'bg-lime-100', text: 'text-lime-700' },
+    { value: 'FORECAST_SETTINGS_UPDATED', label: '⚙️ Forecast Settings Updated', bg: 'bg-lime-100', text: 'text-lime-700' },
+    { value: 'RECOMMENDATION_CREATED', label: '💡 Recommendation Created', bg: 'bg-lime-100', text: 'text-lime-700' },
+    { value: 'RECOMMENDATION_UPDATED', label: '💡 Recommendation Updated', bg: 'bg-lime-100', text: 'text-lime-700' },
+    { value: 'RECOMMENDATION_DELETED', label: '🗑️ Recommendation Deleted', bg: 'bg-red-100', text: 'text-red-700' },
+    { value: 'REORDER_APPROVED', label: '🔁 Reorder Approved', bg: 'bg-lime-100', text: 'text-lime-700' },
+    // Alerts
+    { value: 'ALERT_RESOLVED', label: '✅ Alert Resolved', bg: 'bg-orange-100', text: 'text-orange-700' },
+    // System
+    { value: 'TEMPORAL_REFRESH', label: '🕒 Demo Data Refreshed', bg: 'bg-gray-100', text: 'text-gray-600' },
+    { value: 'DELETE', label: '🗑️ Delete', bg: 'bg-red-200', text: 'text-red-800' },
+    { value: 'OTHER', label: '⚙️ Other', bg: 'bg-gray-100', text: 'text-gray-600' },
 ];
 
-// Human-readable labels for each action enum value
-const ACTION_OPTIONS = [
-    { value: 'USER_LOGIN', label: '🔑 User Login' },
-    { value: 'USER_CREATED', label: '👤 User Created' },
-    { value: 'USER_UPDATED', label: '✏️ User Updated' },
-    { value: 'USER_DELETED', label: '🗑️ User Deleted' },
-    { value: 'EXCEL_UPLOAD', label: '📤 Excel Bulk Upload' },
-    { value: 'BILL_GENERATED', label: '🧾 Bill Generated' },
-    { value: 'STOCK_UPDATE', label: '📦 Stock Update' },
-    { value: 'MEDICINE_CREATED', label: '💊 Medicine Created' },
-    { value: 'MEDICINE_DELETED', label: '❌ Medicine Deleted' },
-    { value: 'ALERT_RESOLVED', label: '✅ Alert Resolved' },
-    { value: 'SUPPLIER_CREATED', label: '🏭 Supplier Created' },
-    { value: 'ORDER_CREATED', label: '🛒 Order Created' },
-    { value: 'ORDER_STATUS_UPDATE', label: '🔄 Order Status Update' },
-    { value: 'REORDER_APPROVED', label: '🔁 Reorder Approved' },
-    { value: 'DELETE', label: '🗑️ Delete' },
-    { value: 'OTHER', label: '⚙️ Other' },
+const MODULE_OPTIONS = [
+    'Inventory', 'Billing', 'Customers', 'UserManagement', 'DataImport',
+    'Alerts', 'Orders', 'Suppliers', 'Categories', 'Forecasting', 'System',
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -102,12 +110,11 @@ function StatCard({ label, value, icon, colorClass }) {
 
 // ── Action Badge ─────────────────────────────────────────────────
 function ActionBadge({ action }) {
-    const style = ACTION_STYLES[action] || ACTION_STYLES.OTHER;
     const found = ACTION_OPTIONS.find(a => a.value === action);
-    const label = found ? found.label : action;
+    const { bg, text } = found || ACTION_OPTIONS.find(a => a.value === 'OTHER');
     return (
-        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${style.bg} ${style.text}`}>
-            {label}
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${bg} ${text}`}>
+            {found ? found.label : action}
         </span>
     );
 }
