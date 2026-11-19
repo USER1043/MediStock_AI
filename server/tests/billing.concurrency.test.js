@@ -12,11 +12,11 @@
  *   - deductions follow FEFO: a later-expiring batch is never touched while an earlier one has stock
  *   - failed bills leave nothing behind (no bill, no history row, no stock change)
  *
- * Needs the MongoDB binary: mongodb-memory-server-core downloads it from fastdl.mongodb.org on first run,
+ * Needs the MongoDB binary: mongodb-memory-server downloads it from fastdl.mongodb.org on first run,
  * or set MONGOMS_SYSTEM_BINARY to a local mongod. Set CONCURRENCY_LOAD to change the request count.
  */
 import { jest } from '@jest/globals';
-import { MongoMemoryReplSet, MongoMemoryServer } from 'mongodb-memory-server-core';
+import { MongoMemoryReplSet, MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 
 jest.setTimeout(180000);

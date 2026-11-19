@@ -120,7 +120,7 @@ export const createBill = async (req, res) => {
       };
 
       const updatedMedicine = await Medicine.findOneAndUpdate(updateFilter, updatePayload, {
-        new: true,
+        returnDocument: 'after',
         session: useTransaction ? session : undefined,
       });
 
