@@ -12,6 +12,9 @@ const Billing = () => {
   const [selectedMedicine, setSelectedMedicine] = useState(null);
   const searchInputRef = useRef(null);
   const quantityInputRef = useRef(null);
+  const editErrorRef = useRef(null);
+  const resultRefs = useRef({});
+  const [activeResultId, setActiveResultId] = useState(null);
   const [quantity, setQuantity] = useState(1);
   const [billItems, setBillItems] = useState([]);
   const [customerType, setCustomerType] = useState('walking'); // walking or regular
@@ -201,19 +204,50 @@ const Billing = () => {
     }
   }, [selectedMedicine]);
 
-  // Enter in the search box picks the first result that can still be added
+  // The bill list scrolls, so bring a bill-line stock error into view when it appears
+  useEffect(() => {
+    if (editError) editErrorRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [editError]);
+
+  // Search results as listed. Out-of-stock medicines and ones whose stock is all in the bill are greyed out;
+  // the rest can be highlighted with ↑/↓ (or the mouse) and picked with Enter. The highlighted row is tagged "↵ Enter".
+  const searchResults = searchTerm ? sortByFEFO(filteredMedicines) : [];
+  const selectableResults = searchResults.filter(m => m.quantity > 0 && m.quantity > cartQuantity(m._id));
+  const enterPick = selectableResults.find(m => m._id === activeResultId) || selectableResults[0] || null;
+
+  // Keep the highlighted row visible when arrowing through a long list
+  useEffect(() => {
+    if (enterPick) resultRefs.current[enterPick._id]?.scrollIntoView({ block: 'nearest' });
+  }, [enterPick?._id]);
+
   const handleSearchKeyDown = (e) => {
-    if (e.key !== 'Enter' || !searchTerm) return;
-    e.preventDefault();
-    const first = sortByFEFO(filteredMedicines).find(m => m.quantity > cartQuantity(m._id));
-    if (first) selectMedicine(first);
+    if (!searchTerm) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (selectableResults.length === 0) return;
+      const at = selectableResults.indexOf(enterPick);
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      const next = selectableResults[(at + step + selectableResults.length) % selectableResults.length];
+      setActiveResultId(next._id);
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (enterPick) selectMedicine(enterPick);
+    }
   };
 
-  // Enter in the quantity box adds the selected medicine with the count as typed (empty counts as 1)
+  // Clear the selected medicine without adding it, and go back to the search box
+  const clearSelection = () => {
+    setSelectedMedicine(null);
+    setQuantity(1);
+    searchInputRef.current?.focus();
+  };
+
+  // In the quantity box: Enter adds the selected medicine with the count as typed (empty counts as 1),
+  // Escape drops the selection without adding it
   const handleQuantityKeyDown = (e) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    handleAddItem();
+    if (e.key === 'Enter') { e.preventDefault(); handleAddItem(); }
+    if (e.key === 'Escape') { e.preventDefault(); clearSelection(); }
   };
 
   // Add item to bill
@@ -531,6 +565,7 @@ const Billing = () => {
                   onKeyDown={handleSearchKeyDown}
                   onChange={(e) => {
                     setSearchTerm(e.target.value);
+                    setActiveResultId(null); // a new search highlights its first result again
                     if (selectedMedicine) {
                       setSelectedMedicine(null);
                     }
@@ -563,25 +598,35 @@ const Billing = () => {
                   <p className="p-4 text-gray-500 text-center">No medicines found</p>
                 ) : (
                   <div className="divide-y">
-                    {sortByFEFO(filteredMedicines).map(medicine => {
+                    {searchResults.map(medicine => {
                       const batch = nextBatch(medicine);
                       const outOfStock = medicine.quantity <= 0;
+                      const inBill = cartQuantity(medicine._id);
+                      const allInBill = !outOfStock && inBill >= medicine.quantity;
+                      const enterTarget = enterPick && enterPick._id === medicine._id;
                       return (
                         <button
                           key={medicine._id}
-                          disabled={outOfStock}
+                          ref={(el) => { resultRefs.current[medicine._id] = el; }}
+                          disabled={outOfStock || allInBill}
                           onClick={() => selectMedicine(medicine)}
-                          className="w-full p-4 text-left hover:bg-primary-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                          onMouseEnter={() => { if (!outOfStock && !allInBill) setActiveResultId(medicine._id); }}
+                          className={`w-full p-4 text-left hover:bg-primary-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent ${enterTarget ? 'bg-primary-50/60' : ''}`}
                         >
                           <div className="flex justify-between items-start">
                             <div>
-                              <p className="font-semibold text-gray-800">{medicine.name}</p>
+                              <p className="font-semibold text-gray-800">
+                                {medicine.name}
+                                {enterTarget && (
+                                  <span className="ml-2 align-middle text-[10px] font-semibold text-primary-700 border border-primary-300 rounded px-1 py-0.5">↵ Enter</span>
+                                )}
+                              </p>
                               <p className="text-sm text-gray-600">{medicine.category}</p>
                               <p className="text-xs text-gray-500 mt-1">
                                 Batch: {batch.batchNumber || 'N/A'} | Rack: {batch.rackNumber || 'N/A'} | Stock: {medicine.quantity}
                                 {outOfStock && <span className="ml-2 text-red-600 font-semibold">Out of stock</span>}
-                                {!outOfStock && cartQuantity(medicine._id) >= medicine.quantity && (
-                                  <span className="ml-2 text-amber-600 font-semibold">All in bill</span>
+                                {allInBill && (
+                                  <span className="ml-2 text-red-600 font-semibold">No stock left (all {inBill} in bill)</span>
                                 )}
                               </p>
                             </div>
@@ -606,9 +651,9 @@ const Billing = () => {
                   <div className="flex items-center gap-3">
                     <p className="font-bold text-primary-600">{formatCurrency(selectedMedicine.sellingPrice)}</p>
                     <button
-                      onClick={() => { setSelectedMedicine(null); setQuantity(1); }}
+                      onClick={clearSelection}
                       className="p-1.5 rounded-full text-gray-500 hover:bg-white hover:text-gray-800 transition-colors"
-                      title="Clear selection"
+                      title="Clear selection (Esc)"
                       aria-label="Clear selected medicine"
                     >
                       <FaTimes size={14} />
@@ -740,13 +785,20 @@ const Billing = () => {
                                 value={editQuantity}
                                 onChange={(e) => setEditQuantity(parseQuantityInput(e.target.value))}
                                 onBlur={() => setEditQuantity((q) => (q >= 1 ? q : 1))}
-                                className="w-full px-3 py-1.5 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                                onKeyDown={(e) => {
+                                  // Enter saves (blocked by the same stock check as the Update button), Escape cancels
+                                  if (e.key === 'Enter') { e.preventDefault(); handleUpdateItem(item.medicineId); }
+                                  if (e.key === 'Escape') { e.preventDefault(); handleCancelEdit(); }
+                                }}
+                                aria-invalid={Boolean(editError)}
+                                className={`w-full px-3 py-1.5 border rounded focus:ring-2 ${editError ? 'border-red-500 focus:ring-red-400' : 'border-gray-300 focus:ring-blue-500'}`}
                                 autoFocus
                               />
                             </div>
                             <button
                               onClick={() => handleUpdateItem(item.medicineId)}
                               disabled={Boolean(editError)}
+                              title={editError || undefined}
                               className="bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <FaCheck size={12} />
@@ -762,7 +814,9 @@ const Billing = () => {
                           </div>
 
                           {editError && (
-                            <p className="text-xs text-red-600 font-medium">{editError}</p>
+                            <p ref={editErrorRef} role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 font-medium">
+                              {editError}
+                            </p>
                           )}
                           <div className="text-xs text-gray-500">
                             New Total: {formatCurrency(item.price * editQuantity)}
