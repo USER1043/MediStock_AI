@@ -121,7 +121,7 @@ Set `VITE_API_BASE_URL` in the root `.env` so both point to the same server.
 | Alerts | `/alerts`, `POST /alerts/generate`, `PUT /alerts/:id/resolve` | Type/severity filters, show-resolved toggle, Resolve and Refresh. `Layout.jsx` polls `/alerts/critical` (on navigation, every 60 s, and on the `medistock:alerts-changed` event) for the sidebar badge |
 | Billing | `/inventory`, `/customers/search`, `POST /billing` | FEFO-sorted medicine picker; cart; 12% GST computed on the server |
 | Inventory / MedicineInventory | `/inventory/*` | Batch table, adjust quantity, low stock / near expiry / expired views |
-| ExcelUpload | `POST /uploads/excel`, `GET /uploads`, `/uploads/export`, `POST /forecast/retrain` | Shows anomalies and success/failure counts; triggers a forecast re-run after a successful import |
+| ExcelUpload | `POST /uploads/excel`, `GET /uploads`, `/uploads/export`, `POST /forecast/retrain` (owner only) | Shows anomalies and success/failure counts. After a successful import, an owner's upload triggers a forecast re-run; a staff upload doesn't (retrain is owner-only) and shows a note that forecasts update when an owner runs them |
 | ForecastReview | `/forecast/recommendations` (CRUD), `/forecast/trend` | Approve / adjust / reject AI drafts; change priority; add a manual recommendation |
 | DemandSetup | `/forecast/parameters`, `POST /forecast/run` | Horizon, lead time, safety stock, 12 monthly multipliers; the *Run forecast* button |
 | ReorderReview | `/suppliers/purchase-orders` | Move POs Pending → Ordered → Shipped → Received |

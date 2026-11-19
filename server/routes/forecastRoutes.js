@@ -23,9 +23,10 @@ router.post('/recommendations', createRecommendation);
 router.put('/recommendations/:id', updateRecommendation);
 router.delete('/recommendations/:id', deleteRecommendation);
 
-// Forecast execution
+// Forecast execution. Both replace every AI_Draft purchase order, so both are owner-only;
+// staff Excel imports skip the automatic retrain (see src/pages/ExcelUpload.jsx).
 router.post('/run', ownerOnly, runForecast);
-router.post('/retrain', triggerRetraining);
+router.post('/retrain', ownerOnly, triggerRetraining);
 
 // Parameters config
 router.get('/parameters', getDemandParameters);

@@ -94,7 +94,7 @@ Things worth knowing:
 | `/api/chatbot` | `chatbotRoutes` | Any logged-in user |
 | `/api/suppliers` | `supplierRoutes` | Supplier create/update + PO activation: owner |
 | `/api/categories` | `categoryRoutes` | Approve: owner |
-| `/api/forecast` | `forecastRoutes` | `router.use(protect)`; run + parameter save: owner |
+| `/api/forecast` | `forecastRoutes` | `router.use(protect)`; run, retrain + parameter save: owner |
 
 Endpoint-level detail: [api-reference.md](api-reference.md).
 

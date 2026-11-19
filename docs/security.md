@@ -96,7 +96,7 @@ sequenceDiagram
 | Create/update suppliers | ✅ | ❌ |
 | Generate reorder drafts, update PO status | ✅ | ✅ |
 | Activate a PO from a draft (`POST /suppliers/purchase-orders`) | ✅ | ❌ |
-| Run forecast, save forecast parameters | ✅ | ❌ |
+| Run or retrain the forecast (replaces all AI drafts), save forecast parameters | ✅ | ❌ |
 | Review / approve forecast recommendations | ✅ | ✅ |
 | User management, register users | ✅ | ❌ |
 | Audit log | ✅ | ❌ |
@@ -162,14 +162,13 @@ These are known gaps, roughly in order of severity:
 
 1. **The 2FA step is not bound to the password step.** `POST /api/auth/login/verify-2fa` accepts `{username, token}` alone and issues a JWT. Anyone holding a user's current TOTP code can log in without the password. The fix is to have `/login` return a short-lived, single-purpose "pre-auth" token that `/verify-2fa` must present.
 2. **TOTP secrets are returned by the API.** `GET /api/auth/me` and `GET /api/auth/users` exclude only `password`, so `twoFactorSecret` is included in their responses. Secrets are also stored in plaintext.
-3. **`POST /api/forecast/retrain` has no `ownerOnly` guard** but calls `runForecast`. This is probably deliberate, because `ExcelUpload.jsx` calls it after every import and staff can import. The effect is that staff can trigger a full forecast run, which deletes all current AI drafts, even though `/run` is owner-only.
-4. **Tokens can't be revoked.** Logout only clears `localStorage`. Deactivating a user doesn't invalidate their existing JWT, and `protect` never re-checks `isActive`.
-5. **The JWT is stored in `localStorage`**, which any XSS on the origin can read.
-6. **No rate limiting or lockout** on `/login` or `/login/verify-2fa`, so passwords and 6-digit codes can be brute-forced.
-7. **Some unguarded reads.** Most `GET` routes need only `protect`, so staff can call `GET /api/billing/summary` and the dashboard analytics endpoints even though the financial *pages* are owner-only on the client.
-8. **Raw error messages** (`error: error.message`) are returned to clients from most controllers.
-9. **No security headers on API responses** (no `helmet`) and **no schema validation** (`express-validator` is installed but unused).
-10. **Chatbot safety settings are `BLOCK_NONE`**, and the Gemini key is sent as a URL query parameter, which can end up in proxy logs.
+3. **Tokens can't be revoked.** Logout only clears `localStorage`. Deactivating a user doesn't invalidate their existing JWT, and `protect` never re-checks `isActive`.
+4. **The JWT is stored in `localStorage`**, which any XSS on the origin can read.
+5. **No rate limiting or lockout** on `/login` or `/login/verify-2fa`, so passwords and 6-digit codes can be brute-forced.
+6. **Some unguarded reads.** Most `GET` routes need only `protect`, so staff can call `GET /api/billing/summary` and the dashboard analytics endpoints even though the financial *pages* are owner-only on the client.
+7. **Raw error messages** (`error: error.message`) are returned to clients from most controllers.
+8. **No security headers on API responses** (no `helmet`) and **no schema validation** (`express-validator` is installed but unused).
+9. **Chatbot safety settings are `BLOCK_NONE`**, and the Gemini key is sent as a URL query parameter, which can end up in proxy logs.
 
 ## Future improvements
 
@@ -177,7 +176,7 @@ These are known gaps, roughly in order of severity:
 - Short-lived access token (about 15 min) plus a rotating **refresh token in an `httpOnly`, `SameSite` cookie**, and a token version on `User` so deactivation or role changes revoke access immediately.
 - `express-rate-limit` on auth routes; account lockout after repeated failures.
 - `helmet`, request validation, and sanitised error messages in production.
-- Add `ownerOnly` to `/forecast/retrain`; review every `GET` that exposes financial data.
+- Review every `GET` that exposes financial data.
 - Send the Gemini key in the `x-goog-api-key` header.
 
 ---
