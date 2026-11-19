@@ -29,6 +29,7 @@ const { adjustQuantity, createMedicine: createMedicineHandler, updateMedicine } 
 const { Medicine } = await import('../models/medicineModel.js');
 const { Bill } = await import('../models/billModel.js');
 const { InventoryHistory } = await import('../models/inventoryHistoryModel.js');
+const { Supplier } = await import('../models/supplierModels.js');
 
 const staffId = new mongoose.Types.ObjectId();
 
@@ -268,6 +269,17 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
   });
 
   describe('createMedicine (adding stock)', () => {
+    // Medicine.supplier must be the _id of an existing supplier
+    let supplierId;
+    beforeEach(async () => {
+      await Supplier.deleteMany({});
+      const supplier = await Supplier.create({
+        supplier_name: 'Test Supplier',
+        contact_info: { phone: '9999999999', email: 'supplier@test.local', address: 'Somewhere' },
+      });
+      supplierId = supplier._id.toString();
+    });
+
     // Same shape MedicineInventory.jsx sends: batch details nested under batches[0]
     const formPayload = (batch) => ({
       name: 'Paracetamol 500mg',
@@ -275,7 +287,7 @@ describe.each(topologies)('Billing integration on %s', (label, startServer) => {
       purchasePrice: 2,
       sellingPrice: 5,
       quantity: batch.quantity,
-      supplier: 'SUP-1',
+      supplier: supplierId,
       batches: [batch],
     });
 

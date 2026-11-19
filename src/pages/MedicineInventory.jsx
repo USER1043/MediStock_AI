@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import dayjs from 'dayjs';
 import axiosInstance from '../utils/axiosConfig';
+import { supplierIdOf, supplierNameOf } from '../utils/suppliers';
 
 // MUI imports
 import {
@@ -14,6 +15,7 @@ import {
     Select,
     MenuItem,
     FormControl,
+    FormHelperText,
     InputLabel,
     Dialog,
     DialogTitle,
@@ -205,7 +207,9 @@ const MedicineInventory = () => {
             stockQuantity: row.stockQuantity,
             rackNumber: row.rackNumber,
             expiryDate: dayjs(row.expiryDate),
-            supplierId: row.supplierId || '',
+            // Older records may store the supplier's name: map it to the id so the dropdown shows it.
+            // No match leaves it empty, and an empty supplier is left unchanged on update.
+            supplierId: supplierIdOf(row.supplierId, suppliers),
         });
         setSelectedRow(row);
         setIsEditMode(true);
@@ -319,6 +323,15 @@ const MedicineInventory = () => {
         }
     }
 
+    // Editing a record whose stored supplier isn't one we know (or that has none): the dropdown is empty,
+    // and an empty supplier is left unchanged on update, so it isn't required here; say what will happen
+    const supplierUnresolved = isEditMode && !form.supplierId;
+    const supplierHint = !supplierUnresolved
+        ? ''
+        : selectedRow?.supplierId
+            ? `Stored supplier "${selectedRow.supplierId}" isn't in the supplier list. It's kept unless you pick one.`
+            : 'No supplier set. Pick one to assign it.';
+
     // ── DataGrid columns ──────────────────────────────────
     const columns = [
         { field: 'medicineId', headerName: 'Medicine ID', flex: 1, minWidth: 120 },
@@ -366,6 +379,8 @@ const MedicineInventory = () => {
             headerName: 'Supplier',
             flex: 1.1,
             minWidth: 130,
+            // The row holds the stored supplier id (or an older name); show the supplier's name
+            valueGetter: (value, row) => supplierNameOf(row.supplierId, suppliers),
         },
     ];
 
@@ -599,19 +614,21 @@ const MedicineInventory = () => {
 
                             {/* 7 — Supplier String */}
                             <div>
-                                <FormControl fullWidth size="small" required>
+                                <FormControl fullWidth size="small" required={!supplierUnresolved}>
                                     <InputLabel>Supplier</InputLabel>
                                     <Select
                                         value={form.supplierId}
                                         label="Supplier"
                                         onChange={handleChange('supplierId')}
+                                        SelectDisplayProps={supplierHint ? { 'aria-describedby': 'supplier-hint' } : undefined}
                                     >
                                         {suppliers.map((s) => (
-                                            <MenuItem key={s.supplier_name} value={s.supplier_name}>
+                                            <MenuItem key={s._id} value={s._id}>
                                                 {s.supplier_name}
                                             </MenuItem>
                                         ))}
                                     </Select>
+                                    {supplierHint && <FormHelperText id="supplier-hint">{supplierHint}</FormHelperText>}
                                 </FormControl>
                             </div>
                         </div>
