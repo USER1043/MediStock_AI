@@ -77,10 +77,18 @@ const MedicineInventory = () => {
 
 
     // Convert API records to the shape expected by the grid
+    // The row shows (and edits) one batch: the earliest-expiring one that still has stock
     function convertRecordToRow(m) {
-        const primaryBatch = m.batches && m.batches.length > 0 ? m.batches[0] : {};
+        const batches = m.batches || [];
+        const inStock = batches.filter((b) => b.quantity > 0)
+            .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+        const primaryBatch = inStock[0] || batches[0] || {};
         return {
             _id: String(m._id),
+            version: m.__v,
+            batchId: primaryBatch._id ? String(primaryBatch._id) : null,
+            batchQuantity: primaryBatch.quantity || 0,
+            batchCount: batches.length,
             medicineId: primaryBatch.batchNumber || m.medicineId || String(m._id),
             name: m.name,
             category: m.category,
@@ -222,11 +230,23 @@ const MedicineInventory = () => {
             showSnackbar('Select a record from the grid to update', 'warning');
             return;
         }
+        const stockChange = Number(form.stockQuantity) - selectedRow.stockQuantity;
+        if (stockChange !== 0 && !selectedRow.batchId) {
+            showSnackbar('This medicine has no batch to change stock on; add stock as a new batch instead', 'warning');
+            return;
+        }
+        if (selectedRow.batchQuantity + stockChange < 0) {
+            showSnackbar(`Batch ${selectedRow.medicineId} only has ${selectedRow.batchQuantity} units; stock can drop by at most that much here`, 'warning');
+            return;
+        }
         setDialog({
             open: true,
             type: 'update',
             title: 'Confirm Update',
-            message: `Are you sure you want to update medicine "${form.name}" (ID: ${form.medicineId})?`,
+            message: `Are you sure you want to update medicine "${form.name}" (ID: ${form.medicineId})?`
+                + (selectedRow.batchCount > 1
+                    ? ` Batch changes apply to batch ${selectedRow.medicineId} only (1 of ${selectedRow.batchCount} batches).`
+                    : ''),
         });
     }
 
@@ -257,7 +277,7 @@ const MedicineInventory = () => {
             supplier: form.supplierId,
             batches: [{
                 batchNumber: form.medicineId,
-                expiryDate: form.expiryDate ? dayjs(form.expiryDate).toISOString() : null,
+                expiryDate: form.expiryDate ? dayjs(form.expiryDate).format('YYYY-MM-DD') : null,
                 quantity: Number(form.stockQuantity),
                 rackNumber: form.rackNumber
             }]
@@ -269,7 +289,20 @@ const MedicineInventory = () => {
                 await axiosInstance.post('/inventory', standardized);
                 showSnackbar('Medicine added successfully');
             } else if (type === 'update') {
-                await axiosInstance.put(`/inventory/${selectedRow._id}`, standardized);
+                // A stock change in the form lands on the batch this row shows; the total follows
+                const stockChange = Number(form.stockQuantity) - selectedRow.stockQuantity;
+                const { quantity, batches, ...medicineFields } = standardized;
+                await axiosInstance.put(`/inventory/${selectedRow._id}`, {
+                    ...medicineFields,
+                    __v: selectedRow.version,
+                    batches: selectedRow.batchId ? [{
+                        _id: selectedRow.batchId,
+                        batchNumber: batches[0].batchNumber,
+                        expiryDate: batches[0].expiryDate,
+                        rackNumber: batches[0].rackNumber,
+                        quantity: selectedRow.batchQuantity + stockChange,
+                    }] : [],
+                });
                 showSnackbar('Medicine updated successfully');
             } else if (type === 'delete') {
                 await axiosInstance.delete(`/inventory/${selectedRow._id}`);
@@ -336,22 +369,13 @@ const MedicineInventory = () => {
         },
     ];
 
-    const rows = medicines.map((m) => {
-        return {
-            id: m._id,
-            medicineId: m.medicineId,
-            name: m.name,
-            category: m.category,
-            purchasePrice: m.purchasePrice,
-            unitPrice: m.unitPrice,
-            stockQuantity: m.stockQuantity,
-            rackNumber: m.rackNumber,
-            expiryDate: m.expiryDate,
-            supplierName: m.supplierId,
-            supplierId: m.supplierId,
-            _id: m._id
-        };
-    });
+    // Keep every field from convertRecordToRow (version, batchId, batchQuantity, batchCount): the update
+    // handler reads them from the clicked grid row
+    const rows = medicines.map((m) => ({
+        ...m,
+        id: m._id,
+        supplierName: m.supplierId,
+    }));
 
     // ── render ─────────────────────────────────────────────
     return (

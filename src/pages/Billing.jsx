@@ -2,14 +2,19 @@
  * @file Billing POS page component for creating bills, processing payments, and customer selection.
  * @module pages/Billing
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axiosInstance from '../utils/axiosConfig';
 import { formatCurrency, sortByFEFO } from '../utils/helpers';
-import { FaSearch, FaTrash, FaCheck, FaMicrophone, FaStop, FaPlus, FaEdit, FaTimesCircle } from 'react-icons/fa';
+import { FaSearch, FaTrash, FaCheck, FaMicrophone, FaStop, FaPlus, FaEdit, FaTimesCircle, FaTimes } from 'react-icons/fa';
 
 const Billing = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedMedicine, setSelectedMedicine] = useState(null);
+  const searchInputRef = useRef(null);
+  const quantityInputRef = useRef(null);
+  const editErrorRef = useRef(null);
+  const resultRefs = useRef({});
+  const [activeResultId, setActiveResultId] = useState(null);
   const [quantity, setQuantity] = useState(1);
   const [billItems, setBillItems] = useState([]);
   const [customerType, setCustomerType] = useState('walking'); // walking or regular
@@ -28,6 +33,8 @@ const Billing = () => {
   const [medicines, setMedicines] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [checkoutError, setCheckoutError] = useState('');
+  const [isPaying, setIsPaying] = useState(false);
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -86,6 +93,77 @@ const Billing = () => {
     fetchBillingData();
   }, []);
 
+  // A changed bill gets a fresh stock check at payment, so drop the previous checkout error
+  useEffect(() => {
+    setCheckoutError('');
+  }, [billItems]);
+
+  // Re-read stock so the page reflects sales made since it loaded; returns the fresh list
+  const refreshStock = async () => {
+    const res = await axiosInstance.get('/inventory');
+    const fresh = res.data.medicines || [];
+    setMedicines(fresh);
+    return fresh;
+  };
+
+  // Units of a medicine already in the bill
+  const cartQuantity = (medicineId) =>
+    billItems.filter(item => item.medicineId === medicineId).reduce((sum, item) => sum + item.quantity, 0);
+
+  // Split a quantity across batches the way the server sells it: earliest expiry with stock first (FEFO)
+  const allocateFEFO = (medicine, qty) => {
+    const batches = (medicine?.batches || []).filter(b => b.quantity > 0)
+      .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+    const parts = [];
+    let left = qty;
+    for (const batch of batches) {
+      if (left <= 0) break;
+      const take = Math.min(batch.quantity, left);
+      parts.push({ ...batch, take });
+      left -= take;
+    }
+    return parts;
+  };
+
+  // The batch the next unit will come from, after what's already in the bill ({} when nothing is left)
+  const nextBatch = (medicine) => {
+    const inBill = cartQuantity(medicine._id);
+    const parts = allocateFEFO(medicine, inBill + 1);
+    const covered = parts.reduce((sum, p) => sum + p.take, 0);
+    return covered > inBill ? parts[parts.length - 1] : {};
+  };
+
+  // Which batches a bill line's units come from (one line can span batches when the oldest runs out)
+  const lineBatches = (item) => {
+    const parts = allocateFEFO(medicines.find(m => m._id === item.medicineId), item.quantity);
+    if (parts.length === 0) return { batchNo: item.batchNo, rackNo: item.rackNo, expiryDate: item.expiryDate, plain: item.batchNo };
+    const multi = parts.length > 1;
+    return {
+      batchNo: parts.map(p => (multi ? `${p.batchNumber} ×${p.take}` : p.batchNumber)).join(', '),
+      rackNo: [...new Set(parts.map(p => p.rackNumber || 'N/A'))].join(', '),
+      expiryDate: parts.map(p => (p.expiryDate ? new Date(p.expiryDate).toLocaleDateString() : 'N/A')).join(', '),
+      plain: parts.map(p => p.batchNumber).join(', '),
+    };
+  };
+
+  // Stock still available to add for the selected medicine, and why Add is blocked (if it is)
+  const availableToAdd = selectedMedicine ? selectedMedicine.quantity - cartQuantity(selectedMedicine._id) : 0;
+  const addError = !selectedMedicine
+    ? ''
+    : selectedMedicine.quantity <= 0
+      ? 'Out of stock'
+      : availableToAdd <= 0
+        ? 'All available stock is already in the bill'
+        : quantity > availableToAdd
+          ? `Insufficient stock: only ${availableToAdd} more available`
+          : '';
+
+  // Same check while editing a bill line
+  const editingMedicine = editingItem ? medicines.find(m => m._id === editingItem) : null;
+  const editError = editingMedicine && editQuantity > editingMedicine.quantity
+    ? `Insufficient stock: only ${editingMedicine.quantity} available`
+    : '';
+
   // Start voice input
   const startVoiceInput = (mode) => {
     if (recognition) {
@@ -112,27 +190,86 @@ const Billing = () => {
     med.category.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Pick a medicine from the search list; the quantity box gets focus so Enter can add it straight away
+  const selectMedicine = (medicine) => {
+    setSelectedMedicine(medicine);
+    setQuantity(1);
+    setSearchTerm('');
+  };
+
+  useEffect(() => {
+    if (selectedMedicine && quantityInputRef.current) {
+      quantityInputRef.current.focus();
+      quantityInputRef.current.select(); // typing replaces the 1 instead of appending to it
+    }
+  }, [selectedMedicine]);
+
+  // The bill list scrolls, so bring a bill-line stock error into view when it appears
+  useEffect(() => {
+    if (editError) editErrorRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [editError]);
+
+  // Search results as listed. Out-of-stock medicines and ones whose stock is all in the bill are greyed out;
+  // the rest can be highlighted with ↑/↓ (or the mouse) and picked with Enter. The highlighted row is tagged "↵ Enter".
+  const searchResults = searchTerm ? sortByFEFO(filteredMedicines) : [];
+  const selectableResults = searchResults.filter(m => m.quantity > 0 && m.quantity > cartQuantity(m._id));
+  const enterPick = selectableResults.find(m => m._id === activeResultId) || selectableResults[0] || null;
+
+  // Keep the highlighted row visible when arrowing through a long list
+  useEffect(() => {
+    if (enterPick) resultRefs.current[enterPick._id]?.scrollIntoView({ block: 'nearest' });
+  }, [enterPick?._id]);
+
+  const handleSearchKeyDown = (e) => {
+    if (!searchTerm) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (selectableResults.length === 0) return;
+      const at = selectableResults.indexOf(enterPick);
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      const next = selectableResults[(at + step + selectableResults.length) % selectableResults.length];
+      setActiveResultId(next._id);
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (enterPick) selectMedicine(enterPick);
+    }
+  };
+
+  // Clear the selected medicine without adding it, and go back to the search box
+  const clearSelection = () => {
+    setSelectedMedicine(null);
+    setQuantity(1);
+    searchInputRef.current?.focus();
+  };
+
+  // In the quantity box: Enter adds the selected medicine with the count as typed (empty counts as 1),
+  // Escape drops the selection without adding it
+  const handleQuantityKeyDown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); handleAddItem(); }
+    if (e.key === 'Escape') { e.preventDefault(); clearSelection(); }
+  };
+
   // Add item to bill
   const handleAddItem = () => {
-    if (!selectedMedicine || quantity <= 0) return;
+    const addQty = quantity === '' ? 1 : quantity;
+    if (!selectedMedicine || !(addQty >= 1)) return;
 
-    // Check if enough stock
-    if (quantity > selectedMedicine.quantity) {
-      return;
-    }
+    // Check if enough stock, counting what is already in the bill
+    if (addError) return;
 
-    const existingItem = billItems.find(item => item.medicineId === selectedMedicine.id);
+    const existingItem = billItems.find(item => item.medicineId === selectedMedicine._id);
 
     if (existingItem) {
       // Update quantity if medicine already in bill
       setBillItems(billItems.map(item =>
-        item.medicineId === selectedMedicine.id
-          ? { ...item, quantity: item.quantity + quantity }
+        item.medicineId === selectedMedicine._id
+          ? { ...item, quantity: item.quantity + addQty, total: item.price * (item.quantity + addQty) }
           : item
       ));
     } else {
       // Add new item
-      const primaryBatch = selectedMedicine.batches && selectedMedicine.batches.length > 0 ? selectedMedicine.batches[0] : {};
+      const primaryBatch = nextBatch(selectedMedicine);
       const newItem = {
         medicineId: selectedMedicine._id,
         name: selectedMedicine.name,
@@ -140,16 +277,17 @@ const Billing = () => {
         expiryDate: primaryBatch.expiryDate ? new Date(primaryBatch.expiryDate).toLocaleDateString() : 'N/A',
         rackNo: primaryBatch.rackNumber || 'N/A',
         price: selectedMedicine.sellingPrice,
-        quantity: quantity,
-        total: selectedMedicine.sellingPrice * quantity
+        quantity: addQty,
+        total: selectedMedicine.sellingPrice * addQty
       };
       setBillItems([...billItems, newItem]);
     }
 
-    // Reset selection
+    // Reset selection and go back to the search box for the next item
     setSelectedMedicine(null);
     setQuantity(1);
     setSearchTerm('');
+    searchInputRef.current?.focus();
   };
 
   // Remove item from bill (DELETE operation)
@@ -157,14 +295,20 @@ const Billing = () => {
     setBillItems(billItems.filter(item => item.medicineId !== medicineId));
   };
 
+  // Let a quantity box be cleared while typing (''); blur puts back 1 if it's left empty
+  const parseQuantityInput = (value) => {
+    if (value === '') return '';
+    const n = parseInt(value, 10);
+    return Number.isNaN(n) ? '' : Math.max(0, n);
+  };
+
   // Update item quantity (UPDATE operation)
   const handleUpdateItem = (medicineId) => {
-    if (editQuantity <= 0) {
+    if (!(editQuantity >= 1)) {
       return;
     }
 
-    const medicine = medicines.find(m => m._id === medicineId);
-    if (editQuantity > medicine.quantity) {
+    if (editError) {
       return;
     }
 
@@ -196,8 +340,31 @@ const Billing = () => {
 
   // Process payment
   const handlePayment = async () => {
-    if (billItems.length === 0) {
+    if (billItems.length === 0 || isPaying) {
       return;
+    }
+
+    setCheckoutError('');
+    setIsPaying(true);
+
+    // Re-check stock right before paying: another counter may have sold some since this page loaded
+    try {
+      const fresh = await refreshStock();
+      const shortages = billItems
+        .map(item => {
+          const med = fresh.find(m => m._id === item.medicineId);
+          const available = med ? med.quantity : 0;
+          return available < item.quantity ? `${item.name} (in bill: ${item.quantity}, available: ${available})` : null;
+        })
+        .filter(Boolean);
+      if (shortages.length > 0) {
+        setCheckoutError(`Insufficient stock for: ${shortages.join('; ')}. Reduce the quantity or remove the item.`);
+        setIsPaying(false);
+        return;
+      }
+    } catch (error) {
+      // If the refresh fails, fall through: the server still checks stock atomically
+      console.error('Stock refresh failed:', error);
     }
 
     const finalCustomerName = customerType === 'regular' && selectedCustomer
@@ -214,7 +381,7 @@ const Billing = () => {
         quantity: item.quantity,
         price: item.price,
         total: item.total,
-        batchNumber: item.batchNo
+        batchNumber: lineBatches(item).plain
       })),
       subtotal,
       tax,
@@ -234,6 +401,7 @@ const Billing = () => {
         paymentMethod: res.data.bill.paymentMethod
       });
       setShowPaymentSuccess(true);
+      refreshStock().catch(() => {});
 
       // Reset form after 3 seconds
       setTimeout(() => {
@@ -248,7 +416,11 @@ const Billing = () => {
       }, 3000);
     } catch (error) {
       console.error('Checkout failed:', error);
-      alert('Failed to process payment. ' + (error.response?.data?.message || ''));
+      // The server rejected the bill (e.g. stock changed in the last moment): show why and reload stock
+      setCheckoutError('Failed to process payment. ' + (error.response?.data?.message || ''));
+      refreshStock().catch(() => {});
+    } finally {
+      setIsPaying(false);
     }
   };
 
@@ -387,10 +559,13 @@ const Billing = () => {
               <div className="relative">
                 <FaSearch className="absolute left-3 top-3 text-gray-400" />
                 <input
+                  ref={searchInputRef}
                   type="text"
                   value={searchTerm}
+                  onKeyDown={handleSearchKeyDown}
                   onChange={(e) => {
                     setSearchTerm(e.target.value);
+                    setActiveResultId(null); // a new search highlights its first result again
                     if (selectedMedicine) {
                       setSelectedMedicine(null);
                     }
@@ -423,23 +598,36 @@ const Billing = () => {
                   <p className="p-4 text-gray-500 text-center">No medicines found</p>
                 ) : (
                   <div className="divide-y">
-                    {sortByFEFO(filteredMedicines).map(medicine => {
-                      const batch = medicine.batches && medicine.batches.length > 0 ? medicine.batches[0] : {};
+                    {searchResults.map(medicine => {
+                      const batch = nextBatch(medicine);
+                      const outOfStock = medicine.quantity <= 0;
+                      const inBill = cartQuantity(medicine._id);
+                      const allInBill = !outOfStock && inBill >= medicine.quantity;
+                      const enterTarget = enterPick && enterPick._id === medicine._id;
                       return (
                         <button
                           key={medicine._id}
-                          onClick={() => {
-                            setSelectedMedicine(medicine);
-                            setSearchTerm('');
-                          }}
-                          className="w-full p-4 text-left hover:bg-primary-50 transition-colors"
+                          ref={(el) => { resultRefs.current[medicine._id] = el; }}
+                          disabled={outOfStock || allInBill}
+                          onClick={() => selectMedicine(medicine)}
+                          onMouseEnter={() => { if (!outOfStock && !allInBill) setActiveResultId(medicine._id); }}
+                          className={`w-full p-4 text-left hover:bg-primary-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent ${enterTarget ? 'bg-primary-50/60' : ''}`}
                         >
                           <div className="flex justify-between items-start">
                             <div>
-                              <p className="font-semibold text-gray-800">{medicine.name}</p>
+                              <p className="font-semibold text-gray-800">
+                                {medicine.name}
+                                {enterTarget && (
+                                  <span className="ml-2 align-middle text-[10px] font-semibold text-primary-700 border border-primary-300 rounded px-1 py-0.5">↵ Enter</span>
+                                )}
+                              </p>
                               <p className="text-sm text-gray-600">{medicine.category}</p>
                               <p className="text-xs text-gray-500 mt-1">
                                 Batch: {batch.batchNumber || 'N/A'} | Rack: {batch.rackNumber || 'N/A'} | Stock: {medicine.quantity}
+                                {outOfStock && <span className="ml-2 text-red-600 font-semibold">Out of stock</span>}
+                                {allInBill && (
+                                  <span className="ml-2 text-red-600 font-semibold">No stock left (all {inBill} in bill)</span>
+                                )}
                               </p>
                             </div>
                             <p className="font-bold text-primary-600">{formatCurrency(medicine.sellingPrice)}</p>
@@ -460,24 +648,39 @@ const Billing = () => {
                     <p className="font-semibold text-gray-800">{selectedMedicine.name}</p>
                     <p className="text-sm text-gray-600">{selectedMedicine.category}</p>
                   </div>
-                  <p className="font-bold text-primary-600">{formatCurrency(selectedMedicine.sellingPrice)}</p>
+                  <div className="flex items-center gap-3">
+                    <p className="font-bold text-primary-600">{formatCurrency(selectedMedicine.sellingPrice)}</p>
+                    <button
+                      onClick={clearSelection}
+                      className="p-1.5 rounded-full text-gray-500 hover:bg-white hover:text-gray-800 transition-colors"
+                      title="Clear selection (Esc)"
+                      aria-label="Clear selected medicine"
+                    >
+                      <FaTimes size={14} />
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-sm mb-3">
                   <div>
                     <span className="text-gray-600">Batch:</span>
-                    <span className="ml-2 font-semibold">{selectedMedicine.batches && selectedMedicine.batches[0] ? selectedMedicine.batches[0].batchNumber : 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).batchNumber || (availableToAdd <= 0 ? 'None left' : 'N/A')}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Rack:</span>
-                    <span className="ml-2 font-semibold">{selectedMedicine.batches && selectedMedicine.batches[0] ? selectedMedicine.batches[0].rackNumber : 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).rackNumber || '—'}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Expiry:</span>
-                    <span className="ml-2 font-semibold">{selectedMedicine.batches && selectedMedicine.batches[0] && selectedMedicine.batches[0].expiryDate ? new Date(selectedMedicine.batches[0].expiryDate).toLocaleDateString() : 'N/A'}</span>
+                    <span className="ml-2 font-semibold">{nextBatch(selectedMedicine).expiryDate ? new Date(nextBatch(selectedMedicine).expiryDate).toLocaleDateString() : '—'}</span>
                   </div>
                   <div>
                     <span className="text-gray-600">Available:</span>
-                    <span className="ml-2 font-semibold">{selectedMedicine.quantity}</span>
+                    <span className="ml-2 font-semibold">{Math.max(availableToAdd, 0)}</span>
+                    {cartQuantity(selectedMedicine._id) > 0 && (
+                      <span className="ml-1 text-xs text-gray-500">
+                        (of {selectedMedicine.quantity} in stock; {cartQuantity(selectedMedicine._id)} in bill)
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -489,9 +692,12 @@ const Billing = () => {
                       <input
                         type="number"
                         min="1"
-                        max={selectedMedicine.quantity}
+                        max={Math.max(availableToAdd, 1)}
+                        ref={quantityInputRef}
                         value={quantity}
-                        onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
+                        onKeyDown={handleQuantityKeyDown}
+                        onChange={(e) => setQuantity(parseQuantityInput(e.target.value))}
+                        onBlur={() => setQuantity((q) => (q >= 1 ? q : 1))}
                         className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
                       />
                       <button
@@ -508,11 +714,15 @@ const Billing = () => {
                     {isListening && voiceMode === 'quantity' && (
                       <p className="text-xs text-primary-600 mt-1">🎤 Say the quantity number...</p>
                     )}
+                    {addError && (
+                      <p className="text-xs text-red-600 mt-1 font-medium">{addError}</p>
+                    )}
                   </div>
-                  <div className="flex items-end">
+                  <div className={`flex ${addError ? 'items-center' : 'items-end'}`}>
                     <button
                       onClick={handleAddItem}
-                      className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-medium flex items-center gap-2"
+                      disabled={Boolean(addError)}
+                      className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <FaPlus />
                       Add Item
@@ -560,7 +770,7 @@ const Billing = () => {
                             <div>
                               <p className="font-semibold text-gray-800">{item.name}</p>
                               <p className="text-xs text-gray-600">
-                                Batch: {item.batchNo} | Rack: {item.rackNo}
+                                Batch: {lineBatches(item).batchNo} | Rack: {lineBatches(item).rackNo}
                               </p>
                             </div>
                             <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">EDITING</span>
@@ -573,14 +783,23 @@ const Billing = () => {
                                 type="number"
                                 min="1"
                                 value={editQuantity}
-                                onChange={(e) => setEditQuantity(parseInt(e.target.value) || 1)}
-                                className="w-full px-3 py-1.5 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                                onChange={(e) => setEditQuantity(parseQuantityInput(e.target.value))}
+                                onBlur={() => setEditQuantity((q) => (q >= 1 ? q : 1))}
+                                onKeyDown={(e) => {
+                                  // Enter saves (blocked by the same stock check as the Update button), Escape cancels
+                                  if (e.key === 'Enter') { e.preventDefault(); handleUpdateItem(item.medicineId); }
+                                  if (e.key === 'Escape') { e.preventDefault(); handleCancelEdit(); }
+                                }}
+                                aria-invalid={Boolean(editError)}
+                                className={`w-full px-3 py-1.5 border rounded focus:ring-2 ${editError ? 'border-red-500 focus:ring-red-400' : 'border-gray-300 focus:ring-blue-500'}`}
                                 autoFocus
                               />
                             </div>
                             <button
                               onClick={() => handleUpdateItem(item.medicineId)}
-                              className="bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 text-sm"
+                              disabled={Boolean(editError)}
+                              title={editError || undefined}
+                              className="bg-blue-600 text-white px-4 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <FaCheck size={12} />
                               Update
@@ -594,6 +813,11 @@ const Billing = () => {
                             </button>
                           </div>
 
+                          {editError && (
+                            <p ref={editErrorRef} role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 font-medium">
+                              {editError}
+                            </p>
+                          )}
                           <div className="text-xs text-gray-500">
                             New Total: {formatCurrency(item.price * editQuantity)}
                           </div>
@@ -605,9 +829,9 @@ const Billing = () => {
                             <div>
                               <p className="font-semibold text-gray-800">{item.name}</p>
                               <p className="text-xs text-gray-600">
-                                Batch: {item.batchNo} | Rack: {item.rackNo}
+                                Batch: {lineBatches(item).batchNo} | Rack: {lineBatches(item).rackNo}
                               </p>
-                              <p className="text-xs text-gray-500">Expiry: {item.expiryDate}</p>
+                              <p className="text-xs text-gray-500">Expiry: {lineBatches(item).expiryDate}</p>
                             </div>
                             <div className="flex gap-2">
                               <button
@@ -699,12 +923,19 @@ const Billing = () => {
                   </div>
                 </div>
 
+                {checkoutError && (
+                  <p className="mb-3 p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+                    {checkoutError}
+                  </p>
+                )}
+
                 {/* Complete Payment Button */}
                 <button
                   onClick={handlePayment}
-                  className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition-colors font-semibold text-lg"
+                  disabled={isPaying}
+                  className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition-colors font-semibold text-lg disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Complete Payment
+                  {isPaying ? 'Processing...' : 'Complete Payment'}
                 </button>
               </>
             )}

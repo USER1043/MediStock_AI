@@ -2,7 +2,7 @@ import XLSX from 'xlsx';
 import fs from 'fs';
 import { Medicine } from '../models/medicineModel.js';
 import { AuditLog } from '../models/auditLogModel.js';
-import { detectAnomalies } from '../utils/helpers.js';
+import { detectAnomalies, addStockToBatches } from '../utils/helpers.js';
 import log from '../utils/logger.js';
 
 // Upload Excel file
@@ -39,22 +39,17 @@ export const uploadExcel = async (req, res) => {
         });
 
         if (existingMedicine) {
-          // Check if batch exists inside parent
-          const existingBatch = existingMedicine.batches.find(b => b.batchNumber === String(row.batchNumber));
-          if (existingBatch) {
-            existingBatch.quantity += parseInt(row.quantity) || 0;
-            existingBatch.expiryDate = row.expiryDate;
-            existingBatch.rackNumber = row.rackNumber || existingBatch.rackNumber;
-          } else {
-            existingMedicine.batches.push({
-              batchNumber: String(row.batchNumber),
-              expiryDate: row.expiryDate,
-              quantity: parseInt(row.quantity) || 0,
-              rackNumber: row.rackNumber || 'N/A'
-            });
-          }
+          // Add to the batch with the same batch number and expiry, or start a new batch
+          addStockToBatches(existingMedicine.batches, {
+            batchNumber: String(row.batchNumber),
+            expiryDate: row.expiryDate,
+            quantity: parseInt(row.quantity) || 0,
+            rackNumber: row.rackNumber
+          });
           // Update total quantity
           existingMedicine.quantity += parseInt(row.quantity) || 0;
+          // Bump __v so concurrent bills/adjustments (which check it) see this stock change
+          existingMedicine.increment();
           await existingMedicine.save();
         } else {
           // Create new parent drug with first batch

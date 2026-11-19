@@ -32,6 +32,32 @@ export const getStockStatus = (quantity, reorderLevel) => {
   return 'high';
 };
 
+// Compare two dates by calendar day (UTC), ignoring time of day
+export const isSameExpiryDay = (a, b) => {
+  const dayA = new Date(a);
+  const dayB = new Date(b);
+  if (isNaN(dayA) || isNaN(dayB)) return false;
+  return dayA.toISOString().slice(0, 10) === dayB.toISOString().slice(0, 10);
+};
+
+// Add incoming stock to a medicine's batches. A batch is reused only when both its
+// batch number and expiry day match; otherwise a new batch is created, so units with
+// different expiry dates are never merged (and an existing batch's expiry is never overwritten)
+export const addStockToBatches = (batches, { batchNumber, expiryDate, quantity, rackNumber }) => {
+  const existing = batches.find(
+    (b) => b.batchNumber === batchNumber && isSameExpiryDay(b.expiryDate, expiryDate)
+  );
+
+  if (existing) {
+    existing.quantity += quantity;
+    if (rackNumber) existing.rackNumber = rackNumber;
+    return { batch: existing, created: false };
+  }
+
+  batches.push({ batchNumber, expiryDate, quantity, rackNumber: rackNumber || 'N/A' });
+  return { batch: batches[batches.length - 1], created: true };
+};
+
 // FEFO sorting - sort by expiry date (ascending)
 export const sortByFEFO = (medicines) => {
   return medicines.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
