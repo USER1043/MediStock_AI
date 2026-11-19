@@ -2,7 +2,7 @@
  * @file Billing POS page component for creating bills, processing payments, and customer selection.
  * @module pages/Billing
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axiosInstance from '../utils/axiosConfig';
 import { formatCurrency, sortByFEFO } from '../utils/helpers';
 import { FaSearch, FaTrash, FaCheck, FaMicrophone, FaStop, FaPlus, FaEdit, FaTimesCircle, FaTimes } from 'react-icons/fa';
@@ -10,6 +10,8 @@ import { FaSearch, FaTrash, FaCheck, FaMicrophone, FaStop, FaPlus, FaEdit, FaTim
 const Billing = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedMedicine, setSelectedMedicine] = useState(null);
+  const searchInputRef = useRef(null);
+  const quantityInputRef = useRef(null);
   const [quantity, setQuantity] = useState(1);
   const [billItems, setBillItems] = useState([]);
   const [customerType, setCustomerType] = useState('walking'); // walking or regular
@@ -185,9 +187,39 @@ const Billing = () => {
     med.category.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Pick a medicine from the search list; the quantity box gets focus so Enter can add it straight away
+  const selectMedicine = (medicine) => {
+    setSelectedMedicine(medicine);
+    setQuantity(1);
+    setSearchTerm('');
+  };
+
+  useEffect(() => {
+    if (selectedMedicine && quantityInputRef.current) {
+      quantityInputRef.current.focus();
+      quantityInputRef.current.select(); // typing replaces the 1 instead of appending to it
+    }
+  }, [selectedMedicine]);
+
+  // Enter in the search box picks the first result that can still be added
+  const handleSearchKeyDown = (e) => {
+    if (e.key !== 'Enter' || !searchTerm) return;
+    e.preventDefault();
+    const first = sortByFEFO(filteredMedicines).find(m => m.quantity > cartQuantity(m._id));
+    if (first) selectMedicine(first);
+  };
+
+  // Enter in the quantity box adds the selected medicine with the count as typed (empty counts as 1)
+  const handleQuantityKeyDown = (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    handleAddItem();
+  };
+
   // Add item to bill
   const handleAddItem = () => {
-    if (!selectedMedicine || !(quantity >= 1)) return;
+    const addQty = quantity === '' ? 1 : quantity;
+    if (!selectedMedicine || !(addQty >= 1)) return;
 
     // Check if enough stock, counting what is already in the bill
     if (addError) return;
@@ -198,7 +230,7 @@ const Billing = () => {
       // Update quantity if medicine already in bill
       setBillItems(billItems.map(item =>
         item.medicineId === selectedMedicine._id
-          ? { ...item, quantity: item.quantity + quantity, total: item.price * (item.quantity + quantity) }
+          ? { ...item, quantity: item.quantity + addQty, total: item.price * (item.quantity + addQty) }
           : item
       ));
     } else {
@@ -211,16 +243,17 @@ const Billing = () => {
         expiryDate: primaryBatch.expiryDate ? new Date(primaryBatch.expiryDate).toLocaleDateString() : 'N/A',
         rackNo: primaryBatch.rackNumber || 'N/A',
         price: selectedMedicine.sellingPrice,
-        quantity: quantity,
-        total: selectedMedicine.sellingPrice * quantity
+        quantity: addQty,
+        total: selectedMedicine.sellingPrice * addQty
       };
       setBillItems([...billItems, newItem]);
     }
 
-    // Reset selection
+    // Reset selection and go back to the search box for the next item
     setSelectedMedicine(null);
     setQuantity(1);
     setSearchTerm('');
+    searchInputRef.current?.focus();
   };
 
   // Remove item from bill (DELETE operation)
@@ -492,8 +525,10 @@ const Billing = () => {
               <div className="relative">
                 <FaSearch className="absolute left-3 top-3 text-gray-400" />
                 <input
+                  ref={searchInputRef}
                   type="text"
                   value={searchTerm}
+                  onKeyDown={handleSearchKeyDown}
                   onChange={(e) => {
                     setSearchTerm(e.target.value);
                     if (selectedMedicine) {
@@ -535,11 +570,7 @@ const Billing = () => {
                         <button
                           key={medicine._id}
                           disabled={outOfStock}
-                          onClick={() => {
-                            setSelectedMedicine(medicine);
-                            setQuantity(1);
-                            setSearchTerm('');
-                          }}
+                          onClick={() => selectMedicine(medicine)}
                           className="w-full p-4 text-left hover:bg-primary-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                         >
                           <div className="flex justify-between items-start">
@@ -617,7 +648,9 @@ const Billing = () => {
                         type="number"
                         min="1"
                         max={Math.max(availableToAdd, 1)}
+                        ref={quantityInputRef}
                         value={quantity}
+                        onKeyDown={handleQuantityKeyDown}
                         onChange={(e) => setQuantity(parseQuantityInput(e.target.value))}
                         onBlur={() => setQuantity((q) => (q >= 1 ? q : 1))}
                         className="w-full px-4 py-2 pr-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
