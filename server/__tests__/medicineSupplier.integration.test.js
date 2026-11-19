@@ -102,7 +102,7 @@ describe('Medicine supplier (real database)', () => {
       reorderLevel: 10,
       purchasePrice: 1,
       sellingPrice: 3,
-      stockStatus: 'high',
+      stockStatus: 'ok',
       supplier: supplierA,
       batches: [
         { batchNumber: 'C-1', expiryDate: '2027-01-31', quantity: 20, rackNumber: 'R1' },

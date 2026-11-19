@@ -13,6 +13,8 @@ import { Bill } from "../models/billModel.js";
 import { InventoryHistory } from "../models/inventoryHistoryModel.js";
 import { AuditLog } from "../models/auditLogModel.js";
 import { Alert } from "../models/alertModel.js";
+import { isMedicineLowStock } from "../utils/stockLevel.js";
+import { lowStockCondition } from "../services/alertService.js";
 import { Report } from "../models/reportModel.js";
 import { Supplier, PurchaseOrder } from "../models/supplierModels.js";
 import { createSeedClock } from "./seedClock.js";
@@ -219,14 +221,17 @@ const refreshTemporalData = async () => {
     }
 
     const alerts = [];
-    const lowStockMeds = medicines.filter((m) => m.quantity <= (m.reorderLevel || 50));
+    const lowStockMeds = medicines.filter(isMedicineLowStock);
     for (const med of lowStockMeds) {
+      // Same alert the alert service would raise (message, severity, fingerprint)
+      const { alertType, message, severity, fingerprint } = lowStockCondition(med);
       const alertDoc = await Alert.create({
         medicineId: med._id,
         medicineName: med.name,
-        alertType: "low_stock",
-        message: `Stock for ${med.name} is critically low (${med.quantity} remaining).`,
-        severity: med.quantity < (med.reorderLevel || 50) / 2 ? "critical" : "warning",
+        alertType,
+        message,
+        severity,
+        fingerprint,
       });
       alerts.push(alertDoc);
 

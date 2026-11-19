@@ -9,7 +9,7 @@
  *   enforces at most one current alert per key.
  * - A user resolving it (`resolvedBy`) acknowledges that situation: it stays current and
  *   stops new alerts. A batch alert stays quiet until its expiry date is edited or its
- *   condition clears and returns; low_stock until it gets worse (low -> out of stock) or
+ *   condition clears and returns; low_stock until it gets worse (low -> critical -> out) or
  *   clears and returns.
  * - When the condition stops holding, the alert is closed (`isCurrent: false`, `clearedAt`);
  *   if nobody had resolved it, the system resolves it (`autoResolved: true`).
@@ -52,7 +52,7 @@ const alertSchema = new mongoose.Schema(
       default: 'warning',
     },
     // Compared between runs: expiry alerts -> [expiry day "YYYY-MM-DD"] (a change updates an
-    // open alert's lastChangedAt, and re-raises an acknowledged one), low_stock -> ['low'] or ['out_of_stock'], overstock -> ['overstock']
+    // open alert's lastChangedAt, and re-raises an acknowledged one), low_stock -> the stock level ['out' | 'critical' | 'low'] (utils/stockLevel.js), overstock -> ['overstock']
     fingerprint: {
       type: [String],
       default: [],

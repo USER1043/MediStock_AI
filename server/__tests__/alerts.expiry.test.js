@@ -145,10 +145,11 @@ describe('evaluateMedicine expiry conditions (one per batch)', () => {
 });
 
 describe('evaluateMedicine stock conditions', () => {
-  it('tells "low" from "out of stock" in the low_stock fingerprint', () => {
-    expect(conditionsOf(medicine({ quantity: 20, reorderLevel: 50 }), 'low_stock')[0].fingerprint).toEqual(['low']);
-    expect(conditionsOf(medicine({ quantity: 0, reorderLevel: 50 }), 'low_stock')[0].fingerprint).toEqual(['out_of_stock']);
-    expect(conditionsOf(medicine({ quantity: 26, reorderLevel: 50 }), 'low_stock')).toEqual([]);
+  it('puts the stock level (out / critical / low) in the low_stock fingerprint', () => {
+    expect(conditionsOf(medicine({ quantity: 26, reorderLevel: 50 }), 'low_stock')[0].fingerprint).toEqual(['low']);
+    expect(conditionsOf(medicine({ quantity: 20, reorderLevel: 50 }), 'low_stock')[0].fingerprint).toEqual(['critical']);
+    expect(conditionsOf(medicine({ quantity: 0, reorderLevel: 50 }), 'low_stock')[0].fingerprint).toEqual(['out']);
+    expect(conditionsOf(medicine({ quantity: 51, reorderLevel: 50 }), 'low_stock')).toEqual([]);
   });
 
   it('raises overstock above three times the reorder level', () => {
@@ -165,8 +166,14 @@ describe('acknowledgementCovers', () => {
     ['expired', ['2026-11-04'], ['2026-11-01'], false], // expiry corrected to another past date
     ['expired', ['2026-11-04'], ['2026-11-04'], true],
     ['low_stock', ['low'], ['low'], true],
-    ['low_stock', ['low'], ['out_of_stock'], false], // got worse
-    ['low_stock', ['out_of_stock'], ['low'], true], // partly restocked, still low
+    ['low_stock', ['low'], ['critical'], false], // got worse
+    ['low_stock', ['low'], ['out'], false], // got worse
+    ['low_stock', ['critical'], ['out'], false], // got worse
+    ['low_stock', ['critical'], ['critical'], true],
+    ['low_stock', ['critical'], ['low'], true], // partly restocked, still low
+    ['low_stock', ['out'], ['critical'], true], // partly restocked, still critical
+    ['low_stock', ['out'], ['low'], true],
+    ['low_stock', ['out_of_stock'], ['low'], false], // unknown (pre-change) fingerprint: re-raise
     ['overstock', ['overstock'], ['overstock'], true],
   ])('%s acknowledged %j, now %j -> covered: %s', (type, acknowledged, current, expected) => {
     expect(acknowledgementCovers(type, acknowledged, current)).toBe(expected);

@@ -31,7 +31,7 @@ erDiagram
         number reorderLevel "default 50"
         number purchasePrice
         number sellingPrice
-        string stockStatus "low | medium | high"
+        string stockStatus "out | critical | low | ok"
         string supplier "Supplier _id (string)"
     }
     BATCH {
@@ -156,7 +156,7 @@ erDiagram
 | `alertType`, `severity`, `message` | What is wrong; the message is refreshed while the alert is open |
 | `batchId` | Expiry alerts (`near_expiry`, `expired`): the `_id` of the batch subdocument in `Medicine.batches` the alert is about. `null` for `low_stock` and `overstock` |
 | `batch` | Snapshot of that batch (`batchNumber`, `expiryDate`, `rackNumber`, `quantity`), refreshed while the alert is open; `null` for stock alerts |
-| `fingerprint` | The situation, compared between runs: `[expiry day]` for expiry alerts, `['low']` / `['out_of_stock']` for low stock, `['overstock']` |
+| `fingerprint` | The situation, compared between runs: `[expiry day]` for expiry alerts, the stock level `['out']` / `['critical']` / `['low']` for low stock, `['overstock']` |
 | `isCurrent` | `true` for the one alert describing the ongoing situation of its medicine and type; `false` once the condition cleared or a newer alert replaced it |
 | `createdAt`, `lastChangedAt` | When raised; when the fingerprint last changed |
 | `isResolved`, `resolvedAt` | Resolved by a user or by the system |
@@ -198,7 +198,7 @@ This is the standard MongoDB guidance: **embed what you read together and what i
 | Field | Derived from | Kept in sync by |
 |-------|--------------|-----------------|
 | `Medicine.quantity` | Sum of `batches[].quantity` (intended) | Each write path updates both by hand |
-| `Medicine.stockStatus` | `quantity` vs `reorderLevel` via `getStockStatus()` | Create, adjust, update paths (billing does not recompute it) |
+| `Medicine.stockStatus` | `quantity` vs `reorderLevel` via `getStockLevel()` (`utils/stockLevel.js`, alias `getStockStatus()` in `utils/helpers.js`) | A `pre('validate')` hook on every document save (create, upload import, PO receipt, seeds); billing, adjust and edit set it in their updates. Reports and alerts compute the level live rather than reading it |
 | `Supplier.delivery_performance_score` | On-time vs late receipts | `updatePurchaseOrderStatus` (±0.5, clamped 0–10) |
 | `Customer.totalPurchases`, `totalSpent` | Bills | Not updated by `createBill` today |
 

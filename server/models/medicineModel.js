@@ -4,6 +4,7 @@
  */
 
 import mongoose from 'mongoose';
+import { STOCK_LEVELS, getStockLevel } from '../utils/stockLevel.js';
 
 const medicineSchema = new mongoose.Schema(
   {
@@ -43,8 +44,9 @@ const medicineSchema = new mongoose.Schema(
     },
     stockStatus: {
       type: String,
-      enum: ['low', 'medium', 'high'],
-      default: 'medium',
+      // Derived from quantity vs reorderLevel (utils/stockLevel.js); recomputed on every save below
+      enum: STOCK_LEVELS,
+      default: 'out',
     },
     // The _id of a Supplier, as a string (the controllers check it exists). Older records may hold a name.
     supplier: {
@@ -61,6 +63,12 @@ const medicineSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Document saves (create, upload import, PO receipt, seeds) keep stockStatus in step with
+// quantity and reorderLevel. Query updates (billing, adjust, edit) set it explicitly.
+medicineSchema.pre('validate', function () {
+  this.stockStatus = getStockLevel(this.quantity, this.reorderLevel);
+});
 
 // Index for FEFO sorting
 medicineSchema.index({ expiryDate: 1 });

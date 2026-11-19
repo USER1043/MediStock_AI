@@ -28,12 +28,9 @@ export const getDaysUntilExpiry = (expiryDate, now = new Date()) => {
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 };
 
-// Get stock status
-export const getStockStatus = (quantity, reorderLevel) => {
-  if (quantity <= reorderLevel / 2) return 'low';
-  if (quantity <= reorderLevel) return 'medium';
-  return 'high';
-};
+// Stock status ('out' | 'critical' | 'low' | 'ok'), stored as Medicine.stockStatus.
+// The definition lives in utils/stockLevel.js; this name is kept for existing callers.
+export { getStockLevel as getStockStatus, isLowStock } from './stockLevel.js';
 
 // Compare two dates by calendar day (UTC), ignoring time of day
 export const isSameExpiryDay = (a, b) => {

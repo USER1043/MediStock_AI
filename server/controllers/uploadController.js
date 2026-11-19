@@ -2,7 +2,7 @@ import XLSX from 'xlsx';
 import fs from 'fs';
 import { Medicine } from '../models/medicineModel.js';
 import { AuditLog } from '../models/auditLogModel.js';
-import { detectAnomalies, addStockToBatches, requestPath, excelRowNumber } from '../utils/helpers.js';
+import { detectAnomalies, addStockToBatches, requestPath, getStockStatus, excelRowNumber } from '../utils/helpers.js';
 import { buildSupplierLookup, supplierDisplayNames } from '../utils/supplierRef.js';
 import log from '../utils/logger.js';
 
@@ -263,7 +263,7 @@ export const exportExcel = async (req, res) => {
           rackNumber: 'N/A',
           reorderLevel: m.reorderLevel,
           supplier: supplierName(m.supplier),
-          stockStatus: m.stockStatus || 'low',
+          stockStatus: getStockStatus(m.quantity, m.reorderLevel),
         });
       } else {
         m.batches.forEach(b => {
@@ -278,7 +278,7 @@ export const exportExcel = async (req, res) => {
             rackNumber: b.rackNumber,
             reorderLevel: m.reorderLevel,
             supplier: supplierName(m.supplier),
-            stockStatus: m.stockStatus || 'low',
+            stockStatus: getStockStatus(m.quantity, m.reorderLevel),
           });
         });
       }

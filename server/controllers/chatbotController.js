@@ -3,6 +3,7 @@ import { Medicine } from '../models/medicineModel.js';
 import { Bill } from '../models/billModel.js';
 import { isNearExpiry, isExpired } from '../utils/helpers.js';
 import log from '../utils/logger.js';
+import { isMedicineLowStock } from '../utils/stockLevel.js';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_API_URL =
@@ -21,7 +22,7 @@ const buildInventoryContext = async () => {
   const todayBills = await Bill.find({ createdAt: { $gte: today } }).lean();
   const todaySales = todayBills.reduce((s, b) => s + b.grandTotal, 0);
 
-  const lowStock = medicines.filter(m => m.quantity <= m.reorderLevel);
+  const lowStock = medicines.filter(isMedicineLowStock);
   const nearExpiry = medicines.filter(m => m.batches && m.batches.some(b => isNearExpiry(b.expiryDate, 30)));
   const expired = medicines.filter(m => m.batches && m.batches.some(b => isExpired(b.expiryDate)));
 
@@ -123,7 +124,7 @@ const keywordFallback = (message, medicines, language) => {
   const ta = language === 'ta';
 
   if (lower.includes('low stock') || lower.includes('reorder')) {
-    const low = medicines.filter(m => m.quantity <= m.reorderLevel);
+    const low = medicines.filter(isMedicineLowStock);
     if (!low.length) return ta ? 'அனைத்து மருந்துகளும் போதுமான அளவில் உள்ளன.' : 'All medicines are adequately stocked.';
     return (ta ? 'குறைந்த இருப்பு மருந்துகள்:\\n' : 'Low stock medicines:\\n') +
       low.map(m => `• ${m.name}: ${m.quantity} units (reorder: ${m.reorderLevel})`).join('\\n');

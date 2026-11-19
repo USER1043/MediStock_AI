@@ -5,6 +5,7 @@ import { InventoryHistory } from '../models/inventoryHistoryModel.js';
 import { alertService, compareAlerts } from '../services/alertService.js';
 import { createAuditEntry } from '../middleware/auditLogger.js';
 import log from '../utils/logger.js';
+import { stockLevelOf } from '../utils/stockLevel.js';
 
 // Alert generation itself lives in services/alertService.js; these handlers stay thin.
 const ALERT_TYPES = ['low_stock', 'near_expiry', 'expired', 'overstock'];
@@ -186,9 +187,10 @@ export const getMedicineRecommendations = async (req, res) => {
       const totalSales = medicineSales.reduce((sum, h) => sum + Math.abs(h.quantityChanged), 0);
 
       let recommendation = 'Monitor';
-      if (medicine.quantity <= medicine.reorderLevel / 2) {
+      const level = stockLevelOf(medicine);
+      if (level === 'out' || level === 'critical') {
         recommendation = 'Order Immediately';
-      } else if (totalSales > 50) {
+      } else if (level === 'low' || totalSales > 50) {
         recommendation = 'Order Soon';
       } else if (totalSales < 5) {
         recommendation = 'Avoid Over Purchasing';

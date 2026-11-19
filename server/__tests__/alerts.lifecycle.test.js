@@ -382,7 +382,8 @@ describe('open stock alerts are updated, not duplicated', () => {
 
     const alerts = await alertsOf(med._id, 'low_stock');
     expect(alerts).toHaveLength(1);
-    expect(alerts[0].fingerprint).toEqual(['out_of_stock']);
+    expect(alerts[0].fingerprint).toEqual(['out']);
+    expect(alerts[0].severity).toBe('critical');
     expect(alerts[0].message).toMatch(/out of stock/i);
   });
 });
@@ -515,12 +516,12 @@ describe('resolving acknowledges until the situation changes', () => {
     expect(cleared).toMatchObject({ isResolved: true, isCurrent: false, autoResolved: false, resolvedByName: 'owner' });
     expect(cleared.clearedAt).toEqual(clock());
 
-    await editBatches(med._id, { 'L-1': { quantity: 3 } }); // same "low" fingerprint as before
+    await editBatches(med._id, { 'L-1': { quantity: 3 } }); // same "critical" fingerprint as before
     await service.generate();
 
     const alerts = await alertsOf(med._id, 'low_stock');
     expect(alerts).toHaveLength(2);
-    expect(alerts[1]).toMatchObject({ isResolved: false, isCurrent: true, fingerprint: ['low'] });
+    expect(alerts[1]).toMatchObject({ isResolved: false, isCurrent: true, fingerprint: ['critical'] });
   });
 
   test('acknowledged low stock: stock hitting zero raises a new alert', async () => {
@@ -534,8 +535,8 @@ describe('resolving acknowledges until the situation changes', () => {
 
     const alerts = await alertsOf(med._id, 'low_stock');
     expect(alerts).toHaveLength(2);
-    expect(alerts[0]).toMatchObject({ isCurrent: false, fingerprint: ['low'] });
-    expect(alerts[1]).toMatchObject({ isResolved: false, isCurrent: true, fingerprint: ['out_of_stock'] });
+    expect(alerts[0]).toMatchObject({ isCurrent: false, fingerprint: ['critical'] });
+    expect(alerts[1]).toMatchObject({ isResolved: false, isCurrent: true, fingerprint: ['out'] });
   });
 });
 

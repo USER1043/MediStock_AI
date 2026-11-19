@@ -1,6 +1,7 @@
 import { Supplier, PurchaseOrder } from '../models/supplierModels.js';
 import { Medicine } from '../models/medicineModel.js';
 import log from '../utils/logger.js';
+import { isMedicineLowStock, stockLevelOf } from '../utils/stockLevel.js';
 
 // ============ SUPPLIER MANAGEMENT ============
 
@@ -118,16 +119,15 @@ export const updateSupplier = async (req, res) => {
 
 export const generateReorderSuggestions = async (req, res) => {
   try {
-    // Get all medicines with low stock
-    const medicines = await Medicine.find({
-      $expr: { $lte: ['$quantity', '$reorderLevel'] },
-    });
+    // Medicines at or below their reorder level (utils/stockLevel.js)
+    const medicines = (await Medicine.find()).filter(isMedicineLowStock);
 
     const drafts = [];
 
     for (const medicine of medicines) {
       const aiDemandForecast = Math.ceil(medicine.reorderLevel * 1.5);
       const suggestedQuantity = aiDemandForecast - medicine.quantity;
+      if (!(suggestedQuantity > 0)) continue; // e.g. reorder level 0: nothing sensible to order
 
       // Find top supplier for this medicine category
       const supplier = await Supplier.findOne({
@@ -139,9 +139,9 @@ export const generateReorderSuggestions = async (req, res) => {
 
       // Determine priority. Out of stock is the most urgent case, but the PO priority enum is
       // Low | Medium | High (shared with forecast drafts and the Forecast Review filter), so it maps to High.
-      let priority = 'Low';
-      if (medicine.quantity === 0 || medicine.quantity < medicine.reorderLevel * 0.5) priority = 'High';
-      else if (medicine.quantity < medicine.reorderLevel) priority = 'Medium';
+      // out / critical -> High, low -> Medium
+      const level = stockLevelOf(medicine);
+      const priority = level === 'out' || level === 'critical' ? 'High' : 'Medium';
 
       const orderNumber = `PO-AI-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const totalAmount = suggestedQuantity * medicine.purchasePrice;
