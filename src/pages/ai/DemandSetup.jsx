@@ -33,7 +33,7 @@ export default function DemandSetup() {
             }
         } catch (error) {
             console.error('Error fetching parameters:', error);
-            toast.error('Failed to load forecast parameters');
+            toast.error(error.response?.data?.message || 'Failed to load forecast parameters');
         } finally {
             setLoading(false);
         }
@@ -60,7 +60,7 @@ export default function DemandSetup() {
             await axiosInstance.post('/forecast/parameters', params);
             toast.success('Parameters saved successfully');
         } catch (error) {
-            toast.error('Failed to save parameters');
+            toast.error(error.response?.data?.message || 'Failed to save parameters');
         } finally {
             setSaving(false);
         }
@@ -72,7 +72,7 @@ export default function DemandSetup() {
             const { data } = await axiosInstance.post('/forecast/run');
             toast.success(data.message || 'Forecast complete');
         } catch (error) {
-            toast.error('Error running forecast');
+            toast.error(error.response?.data?.message || 'Error running forecast');
         } finally {
             setRunning(false);
         }

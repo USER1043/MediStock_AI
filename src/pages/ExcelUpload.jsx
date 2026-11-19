@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef } from 'react';
 import axiosInstance from '../utils/axiosConfig';
 import { useAuth } from '../context/AuthContext';
+import { toast } from 'react-hot-toast';
 import { FaFileExcel, FaUpload, FaDownload, FaCheckCircle, FaTimesCircle, FaExclamationTriangle, FaInfoCircle, FaSpinner } from 'react-icons/fa';
 
 const TEMPLATE_HEADERS = ['name', 'category', 'batchNumber', 'expiryDate', 'quantity', 'purchasePrice', 'sellingPrice', 'rackNumber', 'reorderLevel', 'supplier'];
@@ -75,7 +76,13 @@ const ExcelUpload = () => {
       // Continuous Learning: owners retrain the AI forecast after each import; staff imports leave
       // the current AI drafts alone until an owner runs the forecast
       if (canRetrain) {
-        axiosInstance.post('/forecast/retrain').catch(e => console.error('AI Retrain trigger failed:', e));
+        axiosInstance.post('/forecast/retrain').catch(e => {
+          console.error('AI Retrain trigger failed:', e);
+          toast.error(
+            `Import saved, but retraining the AI forecast failed: ${e.response?.data?.message || e.message}. ` +
+            'Run the forecast again from Forecast Setup.'
+          );
+        });
       }
 
     } catch (err) {
