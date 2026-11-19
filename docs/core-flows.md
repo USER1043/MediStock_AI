@@ -227,40 +227,49 @@ There is no scheduler. Alerts are regenerated **lazily, when they are read**:
 - `POST /api/alerts/generate` (the *Refresh* button on the Alerts page) forces a run. If a run is already in progress it waits for it and then runs again.
 - If a lazy run fails, the read still returns the stored alerts and the next read tries again.
 
-**Where the last-run time lives:** in memory, per Node process (`createAlertService` closure). A restarted process, or each new serverless instance, regenerates on its first read; two processes keep separate clocks and may both run. A partial unique index (`one_current_alert_per_medicine_type`) keeps such overlapping runs from creating duplicate alerts. The clock, the 15-minute threshold and the retention period are injectable (`createAlertService({ clock, staleAfterMs, retentionMs })`) for tests.
+**Where the last-run time lives:** in memory, per Node process (`createAlertService` closure). A restarted process, or each new serverless instance, regenerates on its first read; two processes keep separate clocks and may both run. A partial unique index (`one_current_alert_per_medicine_type_batch`) keeps such overlapping runs from creating duplicate alerts. The clock, the 15-minute threshold and the retention period are injectable (`createAlertService({ clock, staleAfterMs, retentionMs })`) for tests.
 
 ### What it checks
 
-| Type | Condition | Severity | Fingerprint |
-|------|-----------|----------|-------------|
-| `low_stock` | `quantity ≤ reorderLevel / 2` | critical | `['out_of_stock']` if `quantity ≤ 0`, else `['low']` |
-| `near_expiry` | any batch with stock left expires within 7 days | warning | the affected batches, `"<batchNumber>@<YYYY-MM-DD>"` |
-| `expired` | any batch with stock left is past its expiry date | critical | the affected batches |
-| `overstock` | `quantity > 3 × reorderLevel` | info | `['overstock']` |
+`low_stock` and `overstock` are **one alert per medicine**. `near_expiry` and `expired` are **one alert per batch**: a medicine with two expiring batches has two alerts, each resolved, cleared and re-raised on its own.
 
-Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batches with no stock left are ignored. Expiry alerts store a snapshot of the affected batches (number, expiry, rack, quantity), which the Alerts page shows as a table; the message lists them too.
+| Type | Scope | Condition | Severity | Fingerprint |
+|------|-------|-----------|----------|-------------|
+| `low_stock` | medicine | `quantity ≤ reorderLevel / 2` | critical | `['out_of_stock']` if `quantity ≤ 0`, else `['low']` |
+| `near_expiry` | batch | the batch has stock left and expires within 7 days | warning | `[expiry day]`, e.g. `['2026-11-23']` |
+| `expired` | batch | the batch has stock left and is past its expiry date | critical | `[expiry day]` |
+| `overstock` | medicine | `quantity > 3 × reorderLevel` | info | `['overstock']` |
+
+Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batches with no stock left are ignored. A batch is identified by its subdocument `_id` in `Medicine.batches` (`Alert.batchId`), which stays the same across in-place batch edits (`PUT /api/inventory/:id`) and top-ups of the same batch (`addStockToBatches`). Each batch alert keeps a `batch` snapshot (number, expiry, rack, quantity) for display, and its message names the batch:
+
+- `Batch AZI-NE1 expires on 23 Nov 2026 (rack E3, qty 10)`
+- `Batch PAR-001 expired on 04 Nov 2026 and is still in stock (rack A2, qty 200)`
 
 ### Lifecycle
 
-For each `(medicine, alertType)` there is at most one **current** alert (`isCurrent: true`). Each run compares what holds now with it:
+For each `(medicine, alertType, batchId)` (`batchId` is `null` for stock alerts) there is at most one **current** alert (`isCurrent: true`). Each run compares what holds now with it:
 
 ```mermaid
 stateDiagram-v2
     [*] --> Open: condition starts holding
-    Open --> Open: fingerprint or numbers change (updated in place, no duplicate)
+    Open --> Open: details or fingerprint change (updated in place, no duplicate)
     Open --> AutoResolved: condition stops holding (autoResolved, clearedAt)
     Open --> Acknowledged: user resolves (resolvedBy, resolvedAt)
-    Acknowledged --> Acknowledged: same situation, or less (nothing new)
-    Acknowledged --> Superseded: something new (new Open alert raised)
+    Acknowledged --> Acknowledged: condition keeps holding (stays quiet)
+    Acknowledged --> Superseded: low stock gets worse (new Open alert raised)
     Acknowledged --> Cleared: condition stops holding (clearedAt)
     AutoResolved --> [*]
     Superseded --> [*]
     Cleared --> [*]
 ```
 
-- **Open, condition still holds:** the alert is updated in place (message, batches, severity). If its fingerprint changed, e.g. a second batch started expiring, `lastChangedAt` moves too.
-- **Condition no longer holds** (batch sold out or removed, restocked above the threshold, no longer overstocked, medicine deleted): the alert stops being current and gets `clearedAt`. If nobody had resolved it, the system resolves it (`autoResolved: true`, `resolvedAt`).
-- **Resolve = acknowledge.** A user-resolved alert stays current and stops new alerts **while the situation is the same or smaller**: for expiry, no batch outside the acknowledged set (one of two acknowledged batches selling out is not news); for low stock, the same level, or "out of stock" acknowledged and stock now merely low. When something new happens (a batch outside the set starts expiring, "low" becomes "out of stock"), the acknowledged alert is retired (`isCurrent: false`) and a new open alert is raised. If the condition clears and later returns, that is a new alert even with the same fingerprint, because the acknowledged alert stopped being current when it cleared.
+- **Open, condition still holds:** the alert is updated in place (message, batch snapshot, severity). A quantity or rack change only refreshes the message. A fingerprint change (an expiry edit that keeps the batch in the same condition, low → out of stock) also moves `lastChangedAt`.
+- **Condition no longer holds** (the batch sold out, was removed or its expiry was edited out of the window; restocked above the threshold; no longer overstocked; medicine deleted): the alert stops being current and gets `clearedAt`. If nobody had resolved it, the system resolves it (`autoResolved: true`, `resolvedAt`). Other batches' alerts are unaffected.
+- **Resolve = acknowledge.** A user-resolved alert stays current and keeps new alerts away:
+  - **Batch alerts** stay quiet for as long as that batch stays in the same condition (sales, rack moves and expiry edits within the window don't re-raise it; the acknowledged record is left as it was). It comes back as a **new** alert only after the condition clears and returns, e.g. the batch hits zero and is restocked while still expiring, or its expiry is edited out of the window and back in.
+  - **Near expiry → expired** for the same batch is a different alert type: the near_expiry alert clears and a new critical `expired` alert is raised, whether or not the near_expiry one was acknowledged.
+  - **Low stock** stays quiet at the same level, or when "out of stock" was acknowledged and stock is now merely low. If "low" becomes "out of stock", the acknowledged alert is retired (`isCurrent: false`) and a new one is raised. **Overstock** stays quiet while it holds.
+  - In every case, if the condition clears and later returns, that is a new alert, because the acknowledged one stopped being current when it cleared.
 
 ### Resolving
 

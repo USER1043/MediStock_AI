@@ -71,8 +71,8 @@ Base URL (local): `http://localhost:5000/api`
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/` | any | Alerts, unresolved first, then critical → info, newest change first. Query: `resolved=true\|false`, `type=low_stock\|near_expiry\|expired\|overstock`, `severity=critical\|warning\|info`. Regenerates first if stale. |
-| GET | `/critical` | any | Unresolved critical alerts (`count` drives the sidebar badge). Regenerates first if stale. |
+| GET | `/` | any | Alerts (expiry alerts are one per batch, with `batchId` and a `batch` snapshot), unresolved first, then critical → info, newest change first. Query: `resolved=true\|false`, `type=low_stock\|near_expiry\|expired\|overstock`, `severity=critical\|warning\|info`. Regenerates first if stale. |
+| GET | `/critical` | any | Unresolved critical alerts, counted per batch for `expired` (`count` drives the sidebar badge and matches the dashboard's Critical Alerts tile). Regenerates first if stale. |
 | GET | `/recommendations` | any | Medicine recommendations |
 | POST | `/generate` | owner, staff | Force a generation run. Returns `created`, `updated`, `autoResolved`, `pruned` counts and the new alerts in `alerts`. |
 | PUT | `/:id/resolve` | owner, staff | Acknowledge: records `resolvedBy`/`resolvedByName`/`resolvedAt` and writes an `ALERT_RESOLVED` activity entry. `409` if already resolved, `404` if not found. |
