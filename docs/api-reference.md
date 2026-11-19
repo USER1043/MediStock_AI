@@ -21,9 +21,9 @@ Base URL (local): `http://localhost:5000/api`
 | GET | `/me` | any | Current user |
 | POST | `/2fa/setup` | any | → `{qrCodeUrl, secret}` (not saved yet) |
 | POST | `/2fa/verify-setup` | any | `{token, secret}` → enables 2FA |
-| POST | `/register` | owner | `{username, email, password, role?}` — create a user |
+| POST | `/register` | owner | `{username, email, password, role?}` — create a user. A password that breaks the [policy](security.md#passwords) → `400 {errorCode: "WEAK_PASSWORD", message, failedRules}` |
 | GET | `/users` | owner | List users |
-| PUT | `/users/:id` | owner | Update username, email, role, isActive or password |
+| PUT | `/users/:id` | owner | Update username, email, role, isActive or password (same password policy and `400` as `/register`) |
 | DELETE | `/users/:id` | owner | Delete a staff user (not yourself, not another owner) |
 
 ## Inventory — `/api/inventory`

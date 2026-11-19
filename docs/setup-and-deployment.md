@@ -90,7 +90,7 @@ With the Docker database, `MONGODB_URI` needs the root credentials and `authSour
 
 ### Create the first owner
 
-`POST /api/auth/register` needs an existing owner, and the seed scripts expect users to exist already, so the first account has to be created directly. Run this from `server/` so the model's bcrypt hook hashes the password:
+`POST /api/auth/register` needs an existing owner, and the seed scripts expect users to exist already, so the first account has to be created directly. Run this from `server/` so the model's bcrypt hook hashes the password. The password must meet the [password policy](security.md#passwords) (8+ characters with a lowercase letter, an uppercase letter, a number and a symbol), or `User.create` throws a `ValidationError`:
 
 ```bash
 node --input-type=module -e "
@@ -98,7 +98,7 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { User } from './models/userModel.js';
 await mongoose.connect(process.env.MONGODB_URI);
-await User.create({ username: 'owner', email: 'owner@example.com', password: 'change-me', role: 'owner' });
+await User.create({ username: 'owner', email: 'owner@example.com', password: 'Change-me#1', role: 'owner' });
 console.log('owner created'); process.exit(0);
 "
 ```

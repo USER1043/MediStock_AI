@@ -44,6 +44,10 @@ Saving the secret only after a successful verification means a half-finished set
 
 ### Passwords
 
+- **Policy for new passwords:** at least 8 characters, with a lowercase letter, an uppercase letter, a number and a symbol. A symbol is any character that isn't a letter, a digit or whitespace. Unicode letters and digits count (`é` is lowercase, `É` uppercase, `٣` a number), and length is counted in code points. The rule lives in `server/utils/passwordPolicy.js`, with an identical copy in `src/utils/passwordPolicy.js` for the forms; a test fails if the two differ.
+  - `register` and `PUT /users/:id` check it on the plain password and answer `400` with `errorCode: "WEAK_PASSWORD"`, a message naming what's missing, and `failedRules`.
+  - The User `pre('save')` hook also rejects a weak new password (a `ValidationError`), so scripts that call `User.create` are covered.
+  - Login never checks it, so accounts with older passwords can still sign in.
 - Hashed with **bcryptjs** (salt rounds 10) in a Mongoose `pre('save')` hook, only when the password field changed.
 - Compared with `user.matchPassword()`.
 - Login returns the same `Invalid credentials` message for an unknown user and a wrong password, so usernames can't be enumerated through that message.

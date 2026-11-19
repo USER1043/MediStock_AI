@@ -62,11 +62,15 @@ const runUpdateUserInNode = async (uri, req) => {
 
 const BCRYPT_HASH = /^\$2[aby]\$10\$.{53}$/;
 
+// Meets the password policy (utils/passwordPolicy.js)
+const OWNER_PASSWORD = 'Owner#2024';
+
 const createOwner = () =>
-  User.create({ username: 'owner', email: 'owner@test.local', password: 'owner123', role: 'owner' });
+  User.create({ username: 'owner', email: 'owner@test.local', password: OWNER_PASSWORD, role: 'owner' });
 
 // Inserts the owner with a pre-hashed password, bypassing the save hook, so the
 // controller tests exercise the hook only through the controller under test.
+// 'owner123' predates the password policy: such accounts must still log in.
 const insertOwner = async () => {
   const [owner] = await User.insertMany([
     {
@@ -109,7 +113,7 @@ describe('User model and auth controller', () => {
     test('User.create stores a bcrypt hash, not the plain password', async () => {
       const user = await createOwner();
 
-      expect(user.password).not.toBe('owner123');
+      expect(user.password).not.toBe(OWNER_PASSWORD);
       expect(user.password).toMatch(BCRYPT_HASH);
 
       const stored = await User.findById(user._id).lean();
@@ -121,7 +125,7 @@ describe('User model and auth controller', () => {
       await createOwner();
       const user = await User.findOne({ username: 'owner' });
 
-      await expect(user.matchPassword('owner123')).resolves.toBe(true);
+      await expect(user.matchPassword(OWNER_PASSWORD)).resolves.toBe(true);
       await expect(user.matchPassword('wrong-password')).resolves.toBe(false);
     });
 
@@ -136,7 +140,7 @@ describe('User model and auth controller', () => {
       const reloaded = await User.findById(created._id);
       expect(reloaded.isActive).toBe(false);
       expect(reloaded.password).toBe(originalHash);
-      await expect(reloaded.matchPassword('owner123')).resolves.toBe(true);
+      await expect(reloaded.matchPassword(OWNER_PASSWORD)).resolves.toBe(true);
     });
 
     test('changing the password re-hashes it', async () => {
@@ -144,22 +148,47 @@ describe('User model and auth controller', () => {
       const originalHash = created.password;
 
       const user = await User.findById(created._id);
-      user.password = 'new-secret-456';
+      user.password = 'New-Secret-456';
       await user.save();
 
       const reloaded = await User.findById(created._id);
       expect(reloaded.password).not.toBe(originalHash);
-      expect(reloaded.password).not.toBe('new-secret-456');
+      expect(reloaded.password).not.toBe('New-Secret-456');
       expect(reloaded.password).toMatch(BCRYPT_HASH);
-      await expect(reloaded.matchPassword('new-secret-456')).resolves.toBe(true);
-      await expect(reloaded.matchPassword('owner123')).resolves.toBe(false);
+      await expect(reloaded.matchPassword('New-Secret-456')).resolves.toBe(true);
+      await expect(reloaded.matchPassword(OWNER_PASSWORD)).resolves.toBe(false);
     });
 
-    test('validation errors still reject the save', async () => {
-      await expect(
-        User.create({ username: 'shortpw', email: 'shortpw@test.local', password: '123' })
-      ).rejects.toThrow(mongoose.Error.ValidationError);
+    test('a weak new password is rejected by the model, with no plain text in the error', async () => {
+      const error = await User.create({
+        username: 'weak',
+        email: 'weak@test.local',
+        password: 'owner123',
+      }).catch((e) => e);
+
+      expect(error).toBeInstanceOf(mongoose.Error.ValidationError);
+      expect(error.errors.password.kind).toBe('passwordPolicy');
+      expect(error.errors.password.message).toBe('Password must include an uppercase letter and a symbol.');
+      expect(error.message).not.toContain('owner123');
+      expect(await User.countDocuments({ username: 'weak' })).toBe(0);
+
+      // Changing an existing user's password to a weak one is rejected too
+      const created = await createOwner();
+      const user = await User.findById(created._id);
+      user.password = 'weakpass';
+      await expect(user.save()).rejects.toThrow(mongoose.Error.ValidationError);
+      expect((await User.findById(created._id).lean()).password).toBe(created.password);
     });
+
+    test('the model minlength (8) error does not echo the password', async () => {
+      const error = await User.create({ username: 'shortpw', email: 'shortpw@test.local', password: 'Ab1!x' }).catch(
+        (e) => e
+      );
+      expect(error).toBeInstanceOf(mongoose.Error.ValidationError);
+      expect(error.errors.password.kind).toBe('minlength');
+      expect(error.message).not.toContain('Ab1!x');
+    });
+
   });
 
   describe('register and login controllers', () => {
@@ -169,7 +198,7 @@ describe('User model and auth controller', () => {
       const regRes = mockRes();
       await register(
         mockReq({
-          body: { username: 'staff1', email: 'Staff1@Test.local', password: 'staff123' },
+          body: { username: 'staff1', email: 'Staff1@Test.local', password: 'Staff#123' },
           user: ownerReqUser(owner),
         }),
         regRes
@@ -183,7 +212,7 @@ describe('User model and auth controller', () => {
       expect(stored.password).toMatch(BCRYPT_HASH);
 
       const loginRes = mockRes();
-      await login(mockReq({ body: { username: 'staff1', password: 'staff123' } }), loginRes);
+      await login(mockReq({ body: { username: 'staff1', password: 'Staff#123' } }), loginRes);
 
       expect(loginRes.statusCode).toBe(200);
       expect(loginRes.body.success).toBe(true);
@@ -202,7 +231,7 @@ describe('User model and auth controller', () => {
       const res = mockRes();
       await register(
         mockReq({
-          body: { username: 'staff2', email: 'staff2@test.local', password: 'staff123' },
+          body: { username: 'staff2', email: 'staff2@test.local', password: 'Staff#123' },
           user: { id: new mongoose.Types.ObjectId().toString(), role: 'staff' },
         }),
         res
@@ -210,6 +239,51 @@ describe('User model and auth controller', () => {
 
       expect(res.statusCode).toBe(403);
       expect(await User.countDocuments({ username: 'staff2' })).toBe(0);
+    });
+
+    test('register rejects a weak password with 400, names what is missing, and creates no user', async () => {
+      const owner = await insertOwner();
+
+      const res = mockRes();
+      await register(
+        mockReq({
+          body: { username: 'staff3', email: 'staff3@test.local', password: 'staff123' },
+          user: ownerReqUser(owner),
+        }),
+        res
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({
+        success: false,
+        errorCode: 'WEAK_PASSWORD',
+        failedRules: ['uppercase', 'symbol'],
+        message: 'Password must include an uppercase letter and a symbol.',
+      });
+      expect(await User.countDocuments({ username: 'staff3' })).toBe(0);
+
+      const short = mockRes();
+      await register(
+        mockReq({
+          body: { username: 'staff3', email: 'staff3@test.local', password: 'Ab1!' },
+          user: ownerReqUser(owner),
+        }),
+        short
+      );
+      expect(short.statusCode).toBe(400);
+      expect(short.body.failedRules).toEqual(['minLength']);
+      expect(short.body.message).toBe('Password must be at least 8 characters.');
+      expect(await User.countDocuments({ username: 'staff3' })).toBe(0);
+    });
+
+    test('login does not apply the policy: a user whose password predates it can still log in', async () => {
+      await insertOwner(); // stored hash of 'owner123', which the policy would now reject
+
+      const res = mockRes();
+      await login(mockReq({ body: { username: 'owner', password: 'owner123' } }), res);
+
+      expect(res.statusCode).toBe(200);
+      expect(typeof res.body.token).toBe('string');
     });
   });
 
@@ -233,7 +307,7 @@ describe('User model and auth controller', () => {
       // Plain Node, so a CommonJS-interop bug in how bcryptjs is imported shows up
       const res = await runUpdateUserInNode(server.getUri(), {
         params: { id: staff._id.toString() },
-        body: { password: 'new-staff-456' },
+        body: { password: 'New-Staff-456' },
         user: ownerReqUser(owner),
       });
 
@@ -245,16 +319,44 @@ describe('User model and auth controller', () => {
       const stored = await User.findById(staff._id).lean();
       expect(stored.password).toMatch(BCRYPT_HASH);
       expect(stored.password).not.toBe(staff.password);
-      await expect(bcryptjs.compare('new-staff-456', stored.password)).resolves.toBe(true);
+      await expect(bcryptjs.compare('New-Staff-456', stored.password)).resolves.toBe(true);
 
       const newLogin = mockRes();
-      await login(mockReq({ body: { username: 'staff', password: 'new-staff-456' } }), newLogin);
+      await login(mockReq({ body: { username: 'staff', password: 'New-Staff-456' } }), newLogin);
       expect(newLogin.statusCode).toBe(200);
       expect(typeof newLogin.body.token).toBe('string');
 
       const oldLogin = mockRes();
       await login(mockReq({ body: { username: 'staff', password: 'staff123' } }), oldLogin);
       expect(oldLogin.statusCode).toBe(401);
+    }, 30000);
+
+    test('a weak new password is rejected with 400 and the stored hash is unchanged', async () => {
+      const owner = await insertOwner();
+      const staff = await insertStaff();
+
+      const res = await runUpdateUserInNode(server.getUri(), {
+        params: { id: staff._id.toString() },
+        body: { password: 'newstaff456', email: 'changed@test.local' },
+        user: ownerReqUser(owner),
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({
+        success: false,
+        errorCode: 'WEAK_PASSWORD',
+        failedRules: ['uppercase', 'symbol'],
+        message: 'Password must include an uppercase letter and a symbol.',
+      });
+
+      // Nothing in the request was applied
+      const stored = await User.findById(staff._id).lean();
+      expect(stored.password).toBe(staff.password);
+      expect(stored.email).toBe('staff@test.local');
+
+      const oldLogin = mockRes();
+      await login(mockReq({ body: { username: 'staff', password: 'staff123' } }), oldLogin);
+      expect(oldLogin.statusCode).toBe(200);
     }, 30000);
 
     test('updating only email and role leaves the password hash unchanged', async () => {
