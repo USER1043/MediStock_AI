@@ -86,7 +86,7 @@ export const updateSupplier = async (req, res) => {
     const updateData = req.body;
 
     const supplier = await Supplier.findByIdAndUpdate(id, updateData, {
-      new: true,
+      returnDocument: 'after',
       runValidators: true,
     });
 

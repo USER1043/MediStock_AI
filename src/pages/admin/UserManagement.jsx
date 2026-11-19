@@ -4,7 +4,8 @@
  */
 import { useState, useEffect } from 'react';
 import axiosInstance from '../../utils/axiosConfig';
-import { FaPlus, FaEdit, FaTrash, FaUser, FaShieldAlt, FaUserTie, FaKey, FaToggleOn, FaToggleOff } from 'react-icons/fa';
+import { FaPlus, FaEdit, FaTrash, FaUser, FaShieldAlt, FaUserTie, FaKey, FaToggleOn, FaToggleOff, FaCheckCircle, FaRegCircle } from 'react-icons/fa';
+import { PASSWORD_RULES, getPasswordPolicyFailures, describePasswordPolicyFailures } from '../../utils/passwordPolicy';
 
 const UserManagement = () => {
   const [users, setUsers] = useState([]);
@@ -18,6 +19,12 @@ const UserManagement = () => {
     role: 'staff',
   });
   const [showPassword, setShowPassword] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  // An empty password is "not set yet" when adding (the field is required) and
+  // "keep the current one" when editing; anything typed must meet the policy.
+  const passwordFailures = getPasswordPolicyFailures(formData.password);
+  const passwordBlocked = formData.password !== '' && passwordFailures.length > 0;
 
   useEffect(() => {
     fetchUsers();
@@ -39,6 +46,11 @@ const UserManagement = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (passwordBlocked) {
+      setFormError(describePasswordPolicyFailures(passwordFailures));
+      return;
+    }
+    setFormError('');
     try {
       if (editingUser) {
         // Update user
@@ -64,7 +76,8 @@ const UserManagement = () => {
       fetchUsers();
     } catch (error) {
       console.error('Error saving user:', error);
-      alert(error.response?.data?.message || 'Error saving user');
+      // Shown in the form (which stays open), e.g. the server's password policy message
+      setFormError(error.response?.data?.message || 'Error saving user');
     }
   };
 
@@ -76,6 +89,7 @@ const UserManagement = () => {
       password: '', // Don't pre-fill password
       role: user.role,
     });
+    setFormError('');
     setShowForm(true);
   };
 
@@ -117,6 +131,7 @@ const UserManagement = () => {
     setEditingUser(null);
     setShowForm(false);
     setShowPassword(false);
+    setFormError('');
   };
 
   const getRoleIcon = (role) => {
@@ -187,10 +202,15 @@ const UserManagement = () => {
                       <input
                         type={showPassword ? 'text' : 'password'}
                         value={formData.password}
-                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                        onChange={(e) => {
+                          setFormData({ ...formData, password: e.target.value });
+                          setFormError('');
+                        }}
                         required={!editingUser}
-                        className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500"
-                        placeholder="Enter password"
+                        aria-invalid={passwordBlocked}
+                        aria-describedby="password-requirements"
+                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 ${passwordBlocked ? 'border-red-400' : ''}`}
+                        placeholder={editingUser ? 'Leave blank to keep current password' : 'Enter password'}
                       />
                       <button
                         type="button"
@@ -200,6 +220,27 @@ const UserManagement = () => {
                         <FaKey />
                       </button>
                     </div>
+                    <ul id="password-requirements" className="mt-2 space-y-1 text-xs" aria-live="polite">
+                      {PASSWORD_RULES.map((rule) => {
+                        const met = formData.password !== '' && !passwordFailures.includes(rule.id);
+                        return (
+                          <li
+                            key={rule.id}
+                            data-rule={rule.id}
+                            data-met={met}
+                            className={`flex items-center gap-2 ${met ? 'text-green-600' : 'text-gray-500'}`}
+                          >
+                            {met ? <FaCheckCircle aria-hidden="true" /> : <FaRegCircle aria-hidden="true" />}
+                            <span>{rule.label}</span>
+                            <span className="sr-only">{met ? '(met)' : '(not met)'}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <p className="text-xs text-gray-500 mt-1">
+                      A symbol is any character that isn't a letter, a number or a space.
+                      {editingUser && ' These apply only if you set a new password.'}
+                    </p>
                   </div>
 
                   <div>
@@ -221,10 +262,18 @@ const UserManagement = () => {
                   </div>
                 </div>
 
+                {formError && (
+                  <div role="alert" className="mt-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+                    {formError}
+                  </div>
+                )}
+
                 <div className="flex gap-4 mt-6">
                   <button
                     type="submit"
-                    className="flex-1 bg-primary-600 text-white py-2 rounded-lg hover:bg-primary-700"
+                    disabled={passwordBlocked}
+                    title={passwordBlocked ? describePasswordPolicyFailures(passwordFailures) : undefined}
+                    className="flex-1 bg-primary-600 text-white py-2 rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-primary-600"
                   >
                     {editingUser ? 'Update User' : 'Register User'}
                   </button>

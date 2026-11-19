@@ -4,6 +4,20 @@ import log from '../utils/logger.js';
 import { createAuditEntry } from '../middleware/auditLogger.js';
 import speakeasy from 'speakeasy';
 import qrcode from 'qrcode';
+import bcryptjs from 'bcryptjs';
+import { getPasswordPolicyFailures, describePasswordPolicyFailures } from '../utils/passwordPolicy.js';
+
+// 400 body for a password that breaks the policy, or null if it's acceptable
+const weakPasswordResponse = (password) => {
+  const failedRules = getPasswordPolicyFailures(password);
+  if (failedRules.length === 0) return null;
+  return {
+    success: false,
+    message: describePasswordPolicyFailures(failedRules),
+    errorCode: 'WEAK_PASSWORD',
+    failedRules,
+  };
+};
 
 // Register new user (Owner only - for adding staff)
 export const register = async (req, res) => {
@@ -35,6 +49,11 @@ export const register = async (req, res) => {
         success: false,
         message: `Invalid role. Allowed roles: ${allowedRoles.join(', ')}`,
       });
+    }
+
+    const weakPassword = weakPasswordResponse(password);
+    if (weakPassword) {
+      return res.status(400).json(weakPassword);
     }
 
     // Check if user already exists
@@ -314,9 +333,12 @@ export const updateUser = async (req, res) => {
     if (role) updateData.role = role;
     if (typeof isActive === 'boolean') updateData.isActive = isActive;
 
-    // If password is being updated, hash it
+    // If password is being updated, check the policy on the plain text, then hash it
     if (password) {
-      const bcryptjs = await import('bcryptjs');
+      const weakPassword = weakPasswordResponse(password);
+      if (weakPassword) {
+        return res.status(400).json(weakPassword);
+      }
       const salt = await bcryptjs.genSalt(10);
       updateData.password = await bcryptjs.hash(password, salt);
     }
@@ -324,7 +346,7 @@ export const updateUser = async (req, res) => {
     const user = await User.findByIdAndUpdate(
       id,
       updateData,
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).select('-password');
 
     if (!user) {

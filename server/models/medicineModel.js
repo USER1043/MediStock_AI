@@ -46,9 +46,9 @@ const medicineSchema = new mongoose.Schema(
       enum: ['low', 'medium', 'high'],
       default: 'medium',
     },
+    // The _id of a Supplier, as a string (the controllers check it exists). Older records may hold a name.
     supplier: {
       type: String,
-      default: 'Default Supplier',
     },
     createdAt: {
       type: Date,

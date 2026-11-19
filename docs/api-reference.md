@@ -21,9 +21,9 @@ Base URL (local): `http://localhost:5000/api`
 | GET | `/me` | any | Current user |
 | POST | `/2fa/setup` | any | → `{qrCodeUrl, secret}` (not saved yet) |
 | POST | `/2fa/verify-setup` | any | `{token, secret}` → enables 2FA |
-| POST | `/register` | owner | `{username, email, password, role?}` — create a user |
+| POST | `/register` | owner | `{username, email, password, role?}` — create a user. A password that breaks the [policy](security.md#passwords) → `400 {errorCode: "WEAK_PASSWORD", message, failedRules}` |
 | GET | `/users` | owner | List users |
-| PUT | `/users/:id` | owner | Update username, email, role, isActive or password |
+| PUT | `/users/:id` | owner | Update username, email, role, isActive or password (same password policy and `400` as `/register`) |
 | DELETE | `/users/:id` | owner | Delete a staff user (not yourself, not another owner) |
 
 ## Inventory — `/api/inventory`
@@ -38,8 +38,8 @@ Base URL (local): `http://localhost:5000/api`
 | GET | `/history` | owner, staff | Inventory movement ledger |
 | GET | `/intelligence` | owner | Fast/slow movers, critical items, recommendations |
 | GET | `/:id` | any | One medicine |
-| POST | `/` | owner, staff | `{name, category, batchNumber, expiryDate, quantity, purchasePrice, sellingPrice, rackNumber, reorderLevel?, supplier?}`; batch fields may instead be nested as `batches: [{…}]`. Upserts by `name`: tops up the batch with the same `batchNumber` **and** expiry day, otherwise adds a new batch (an existing batch's expiry is never overwritten). |
-| PUT | `/:id` | owner, staff | `{name?, category?, purchasePrice?, sellingPrice?, reorderLevel?, supplier?, __v?, batches?: [{_id, batchNumber?, expiryDate?, rackNumber?, quantity?}], reason?}`. Edits batches in place by `_id` (others untouched); a batch quantity change moves the total by the same amount and is logged as an `adjustment`. The total can't be set directly (400). Returns 409 if `__v` is stale or the name belongs to another medicine. |
+| POST | `/` | owner, staff | `{name, category, batchNumber, expiryDate, quantity, purchasePrice, sellingPrice, rackNumber, reorderLevel?, supplier?}`; batch fields may instead be nested as `batches: [{…}]`. Upserts by `name`: tops up the batch with the same `batchNumber` **and** expiry day, otherwise adds a new batch (an existing batch's expiry is never overwritten). `supplier` must be the `_id` of an existing supplier (400 otherwise, nothing written); omitted or empty means none. When the name already exists only the batch is added, so `supplier` is checked but not stored. |
+| PUT | `/:id` | owner, staff | `{name?, category?, purchasePrice?, sellingPrice?, reorderLevel?, supplier?, __v?, batches?: [{_id, batchNumber?, expiryDate?, rackNumber?, quantity?}], reason?}`. Edits batches in place by `_id` (others untouched); a batch quantity change moves the total by the same amount and is logged as an `adjustment`. The total can't be set directly (400). `supplier` must be the `_id` of an existing supplier (400, nothing written); an empty `supplier` (`""`/`null`) leaves the stored one unchanged. Returns 409 if `__v` is stale or the name belongs to another medicine. |
 | DELETE | `/:id` | owner | Delete medicine |
 | POST | `/:id/adjust-quantity` | owner, staff | `{quantityChanged, reason, batchNumber?, expiryDate?, rackNumber?}`. Negative values deduct FEFO from the oldest batch. Positive values require `batchNumber` and `expiryDate`: they top up the batch with that number and expiry day, or create a new batch. Returns 409 on a concurrent change. |
 
