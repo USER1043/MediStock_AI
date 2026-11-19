@@ -137,20 +137,30 @@ npm test        # node --experimental-vm-modules jest (ESM)
 | `__tests__/billing.helpers.test.js` | Unit | No | Formatting, validation and invoice-number helpers |
 | `__tests__/billing.controller.test.js` | Unit-style | No | Billing rules: stock checks, deduction, payment methods |
 | `tests/accuracy.test.js` | Model | No | LSTM on synthetic trend and seasonal data (30 s timeout) |
+| `__tests__/alerts.expiry.test.js` | Unit (models mocked) | No | Batch-level near-expiry / expired detection and alert generation |
 | `tests/upload.test.js` | Integration (Supertest) | **Yes** | `POST /api/uploads/excel` end to end against `server.js` |
+| `tests/billing.concurrency.test.js` | Load / concurrency | **Yes** (in-memory, see below) | Concurrent bills and stock adjustments on a replica set (transactions) and a standalone server (compensating rollback): no overselling, `quantity` equals the batch total, every sold unit has one bill and one history row, FEFO order, clean rollback |
 
 Coverage is collected from `controllers/` and `utils/` (`jest.config.js`).
 
-Without a database, the four suites that don't need MongoDB pass (133 tests). `upload.test.js` fails because importing `server.js` runs `connectDB()` at the top level. Set `MONGODB_URI` (and `FRONTEND_URL`) before running the full suite.
+Without a database, the five suites that don't need MongoDB pass (142 tests). `upload.test.js` fails because importing `server.js` runs `connectDB()` at the top level. Set `MONGODB_URI` (and `FRONTEND_URL`) before running the full suite.
 
 **Gaps worth knowing:**
 
 - The three `__tests__/billing.*` suites define their logic **inside the test files** and don't import the production controller or helpers. They document the intended rules but won't catch regressions in `billingController.js`.
-- There are no tests for auth, RBAC guards, 2FA, forecasting (`computeForecast`), purchase orders, alerts or the chatbot.
+- There are no tests for auth, RBAC guards, 2FA, forecasting (`computeForecast`), purchase orders or the chatbot.
 - There's no frontend test setup.
 - No CI workflow runs tests. The only workflow is release-please.
 
-Good next tests: Supertest cases for `protect`/`authorize` on each router, the 2FA login path, `createBill` against an in-memory MongoDB (`mongodb-memory-server`), and `adjustQuantity` FEFO deduction.
+Good next tests: Supertest cases for `protect`/`authorize` on each router, and the 2FA login path.
+
+**Concurrency tests.** `billing.concurrency.test.js` starts a real MongoDB with `mongodb-memory-server-core`, which downloads the `mongod` binary from `fastdl.mongodb.org` on first run (or uses `MONGOMS_SYSTEM_BINARY` if set). `CONCURRENCY_LOAD` sets the number of concurrent requests per scenario (default 40). Each run logs how many requests got `201`, `409` and so on.
+
+```bash
+cd server
+node --experimental-vm-modules node_modules/jest/bin/jest.js tests/billing.concurrency.test.js
+CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.js tests/billing.concurrency.test.js
+```
 
 ---
 
