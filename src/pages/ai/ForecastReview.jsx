@@ -62,7 +62,7 @@ export default function ForecastReview() {
   const [trendData, setTrendData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState({ priority: "", status: "pending" });
+  const [filters, setFilters] = useState({ priority: "", status: "new" });
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
@@ -110,13 +110,10 @@ export default function ForecastReview() {
     }
   };
 
-  // Updates approval status for a recommendation.
-  const handleStatusUpdate = async (id, status, approvedQty) => {
+  // Approves or rejects a recommendation (owner only).
+  const handleStatusUpdate = async (id, status) => {
     try {
-      await axiosInstance.put(`/forecast/recommendations/${id}`, {
-        status,
-        approvedQty,
-      });
+      await axiosInstance.put(`/forecast/recommendations/${id}`, { status });
       toast.success(`Recommendation ${status}`);
       fetchData();
     } catch (error) {
@@ -151,8 +148,9 @@ export default function ForecastReview() {
         await axiosInstance.put(
           `/forecast/recommendations/${formData._id}`,
           {
-            ...formData,
-            status: "adjusted",
+            quantity: formData.optimalReorderQty,
+            priority: formData.priority,
+            restockingDate: formData.restockingDate,
           },
         );
         toast.success("Recommendation adjusted");
@@ -326,7 +324,7 @@ export default function ForecastReview() {
                 }}
               >
                 <MenuItem value="">All Statuses</MenuItem>
-                <MenuItem value="pending">Pending</MenuItem>
+                <MenuItem value="new">New</MenuItem>
                 <MenuItem value="approved">Approved</MenuItem>
                 <MenuItem value="adjusted">Adjusted</MenuItem>
                 <MenuItem value="rejected">Rejected</MenuItem>
@@ -396,7 +394,7 @@ export default function ForecastReview() {
                         </TableCell>
                         <TableCell>
                           <Chip
-                            label={(row.status || "pending").toUpperCase()}
+                            label={row.status.toUpperCase()}
                             variant="outlined"
                             color={
                               row.status === "approved"
@@ -413,17 +411,13 @@ export default function ForecastReview() {
                         </TableCell>
                         <TableCell align="right">
                           {/* Only drafts under review can be changed; approved and rejected rows are history */}
-                          {row.status === "pending" || row.status === "adjusted" ? (
+                          {row.status === "new" || row.status === "adjusted" ? (
                             <>
                               {isOwner && (
                                 <IconButton
                                   color="success"
                                   onClick={() =>
-                                    handleStatusUpdate(
-                                      row._id,
-                                      "approved",
-                                      row.optimalReorderQty,
-                                    )
+                                    handleStatusUpdate(row._id, "approved")
                                   }
                                   title="Approve Recommendation"
                                 >

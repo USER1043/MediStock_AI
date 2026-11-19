@@ -1,8 +1,10 @@
 /**
- * PUT /api/forecast/recommendations/:id
- *   - a quantity with no status adjusts the draft (→ Adjusted); the quantity is validated (positive whole number)
+ * PUT /api/forecast/recommendations/:id  { status?: approved|rejected, quantity?, priority?, restockingDate? }
+ *   - no status: the edits are applied and the draft becomes Adjusted
+ *   - approved → Pending (edits in the same request applied), rejected → Cancelled (no edits allowed)
  *   - the transition is one conditional update on the draft statuses, so two requests racing for the same
  *     draft cannot both win and an approve is never overwritten by a late adjust (409 NOT_A_DRAFT)
+ * GET /api/forecast/recommendations labels each order new | adjusted | approved | rejected
  * Runs the API routers as server.js mounts them, against a real MongoDB (mongodb-memory-server).
  */
 import { jest } from '@jest/globals';
@@ -33,6 +35,8 @@ let supplier;
 
 const tokenFor = (user) =>
   jwt.sign({ id: user._id.toString(), username: user.username, email: user.email, role: user.role }, process.env.JWT_SECRET);
+
+const get = (token) => request(app).get('/api/forecast/recommendations').set('Authorization', `Bearer ${token}`);
 
 const put = (token, id, body) =>
   request(app).put(`/api/forecast/recommendations/${id}`).set('Authorization', `Bearer ${token}`).send(body);
@@ -90,11 +94,11 @@ beforeEach(async () => {
   });
 });
 
-describe('quantity-only PUT', () => {
-  test.each([['optimalReorderQty'], ['approvedQty']])('staff can adjust a draft by sending only %s', async (field) => {
+describe('adjusting (no status)', () => {
+  test('staff can change the quantity; the draft becomes Adjusted and the total follows', async () => {
     const po = await addPo();
 
-    const res = await put(staffToken, po._id, { [field]: 40 });
+    const res = await put(staffToken, po._id, { quantity: 40 });
 
     expect(res.status).toBe(200);
     expect(res.body.recommendation).toMatchObject({ order_status: 'Adjusted', requested_quantity: 40, total_amount: 80 });
@@ -104,37 +108,50 @@ describe('quantity-only PUT', () => {
     expect(after.updatedAt.getTime()).toBeGreaterThan(po.updatedAt.getTime());
   });
 
-  test('a quantity-only PUT on an already adjusted draft keeps it Adjusted; a numeric string works', async () => {
+  test('an already adjusted draft stays Adjusted; a numeric string quantity works', async () => {
     const po = await addPo('Adjusted');
-    const res = await put(staffToken, po._id, { optimalReorderQty: '12' });
-    expect(res.status).toBe(200);
+    expect((await put(staffToken, po._id, { quantity: '12' })).status).toBe(200);
     expect(await stored(po)).toMatchObject({ order_status: 'Adjusted', requested_quantity: 12, total_amount: 24 });
   });
 
-  test('priority and date without a quantity or status still leave the status alone', async () => {
+  test('changing only priority and date is an adjustment too', async () => {
     const po = await addPo();
-    const res = await put(staffToken, po._id, { priority: 'low', restockingDate: '2030-01-01' });
-    expect(res.status).toBe(200);
+    expect((await put(staffToken, po._id, { priority: 'low', restockingDate: '2030-01-01' })).status).toBe(200);
     const after = await stored(po);
-    expect(after).toMatchObject({ order_status: 'AI_Draft', requested_quantity: 77 });
+    expect(after).toMatchObject({ order_status: 'Adjusted', requested_quantity: 77 });
     expect(after.ai_forecast_reference.priority).toBe('Low');
     expect(after.expected_delivery_date.toISOString()).toMatch(/^2030-01-01/);
     expect(after.ai_forecast_reference.demand_predicted).toBe(77);
   });
 
-  test('an empty body changes nothing', async () => {
+  test('staff cannot approve or reject', async () => {
     const po = await addPo();
     const before = await stored(po);
-    expect((await put(staffToken, po._id, {})).status).toBe(200);
-    expect(await stored(po)).toEqual(before);
-  });
-
-  test('staff still cannot approve or reject, even with a quantity', async () => {
-    const po = await addPo();
-    const before = await stored(po);
-    expect((await put(staffToken, po._id, { status: 'approved', optimalReorderQty: 5 })).status).toBe(403);
+    expect((await put(staffToken, po._id, { status: 'approved', quantity: 5 })).status).toBe(403);
     expect((await put(staffToken, po._id, { status: 'rejected' })).status).toBe(403);
     expect(await stored(po)).toEqual(before);
+  });
+});
+
+describe('deciding (owner)', () => {
+  test('approve → Pending with approved_by; a quantity sent with it is applied', async () => {
+    const plain = await addPo();
+    const withQty = await addPo();
+    expect((await put(ownerToken, plain._id, { status: 'approved' })).status).toBe(200);
+    expect((await put(ownerToken, withQty._id, { status: 'approved', quantity: 90 })).status).toBe(200);
+    expect(await stored(plain)).toMatchObject({ order_status: 'Pending', requested_quantity: 77 });
+    const approved = await stored(withQty);
+    expect(approved).toMatchObject({ order_status: 'Pending', requested_quantity: 90, total_amount: 180 });
+    expect(approved.approved_by.toString()).toBe(owner._id.toString());
+  });
+
+  test('reject → Cancelled; a reject with edits is 400', async () => {
+    const po = await addPo();
+    const before = await stored(po);
+    expect((await put(ownerToken, po._id, { status: 'rejected', quantity: 5 })).status).toBe(400);
+    expect(await stored(po)).toEqual(before);
+    expect((await put(ownerToken, po._id, { status: 'rejected' })).status).toBe(200);
+    expect((await stored(po)).order_status).toBe('Cancelled');
   });
 });
 
@@ -144,49 +161,41 @@ describe('validation', () => {
     async (bad) => {
       const po = await addPo();
       const before = await stored(po);
-
-      for (const body of [{ optimalReorderQty: bad }, { approvedQty: bad }, { status: 'adjusted', optimalReorderQty: bad }]) {
-        const res = await put(staffToken, po._id, body);
+      for (const [token, body] of [[staffToken, { quantity: bad }], [ownerToken, { status: 'approved', quantity: bad }]]) {
+        const res = await put(token, po._id, body);
         expect(res.status).toBe(400);
         expect(res.body).toMatchObject({ success: false, errorCode: 'INVALID_INPUT' });
       }
-      const approve = await put(ownerToken, po._id, { status: 'approved', approvedQty: bad });
-      expect(approve.status).toBe(400);
       expect(await stored(po)).toEqual(before);
     }
   );
 
-  test('an unknown status, an unknown priority and a bad date are 400', async () => {
+  test.each([['adjusted'], ['pending'], ['shipped'], [''], [null]])('status %j is 400 (only approved or rejected)', async (bad) => {
     const po = await addPo();
     const before = await stored(po);
-    expect((await put(staffToken, po._id, { status: 'shipped' })).status).toBe(400);
-    expect((await put(staffToken, po._id, { priority: 'urgent' })).status).toBe(400);
-    expect((await put(staffToken, po._id, { restockingDate: 'not a date' })).status).toBe(400);
+    const res = await put(staffToken, po._id, { status: bad, quantity: 5 });
+    expect(res.status).toBe(400);
+    expect(res.body.errorCode).toBe('INVALID_INPUT');
     expect(await stored(po)).toEqual(before);
   });
 
-  test('the original status/quantity forms still work', async () => {
-    const adjust = await addPo();
-    const approve = await addPo();
-    const reject = await addPo();
-    expect((await put(staffToken, adjust._id, { status: 'adjusted', optimalReorderQty: 40, priority: 'low' })).status).toBe(200);
-    expect((await put(ownerToken, approve._id, { status: 'approved', approvedQty: 90 })).status).toBe(200);
-    expect((await put(ownerToken, reject._id, { status: 'rejected' })).status).toBe(200);
-    expect(await stored(adjust)).toMatchObject({ order_status: 'Adjusted', requested_quantity: 40, total_amount: 80 });
-    const approved = await stored(approve);
-    expect(approved).toMatchObject({ order_status: 'Pending', requested_quantity: 90, total_amount: 180 });
-    expect(approved.approved_by.toString()).toBe(owner._id.toString());
-    expect((await stored(reject)).order_status).toBe('Cancelled');
+  test('an empty body, an unknown priority and a bad date are 400', async () => {
+    const po = await addPo();
+    const before = await stored(po);
+    expect((await put(staffToken, po._id, {})).status).toBe(400);
+    expect((await put(staffToken, po._id, { priority: 'urgent' })).status).toBe(400);
+    expect((await put(staffToken, po._id, { restockingDate: 'not a date' })).status).toBe(400);
+    expect(await stored(po)).toEqual(before);
   });
 });
 
 describe('atomic transitions', () => {
   test('approving an already approved order is 409 NOT_A_DRAFT and nothing changes', async () => {
     const po = await addPo();
-    expect((await put(ownerToken, po._id, { status: 'approved', approvedQty: 90 })).status).toBe(200);
+    expect((await put(ownerToken, po._id, { status: 'approved', quantity: 90 })).status).toBe(200);
     const approved = await stored(po);
 
-    const again = await put(ownerToken, po._id, { status: 'approved', approvedQty: 500 });
+    const again = await put(ownerToken, po._id, { status: 'approved', quantity: 500 });
 
     expect(again.status).toBe(409);
     expect(again.body).toMatchObject({ success: false, errorCode: 'NOT_A_DRAFT' });
@@ -195,10 +204,10 @@ describe('atomic transitions', () => {
 
   test('an adjust that arrives after the approve is 409 and does not overwrite the approved quantity', async () => {
     const po = await addPo();
-    await put(ownerToken, po._id, { status: 'approved', approvedQty: 90 });
+    await put(ownerToken, po._id, { status: 'approved', quantity: 90 });
     const approved = await stored(po);
 
-    const late = await put(staffToken, po._id, { optimalReorderQty: 3 });
+    const late = await put(staffToken, po._id, { quantity: 3 });
 
     expect(late.status).toBe(409);
     expect(late.body.errorCode).toBe('NOT_A_DRAFT');
@@ -221,12 +230,11 @@ describe('atomic transitions', () => {
     for (let round = 0; round < 5; round++) {
       const po = await addPo();
       const results = await Promise.all([
-        put(ownerToken, po._id, { status: 'approved', approvedQty: 10 }),
-        put(ownerToken, po._id, { status: 'approved', approvedQty: 20 }),
+        put(ownerToken, po._id, { status: 'approved', quantity: 10 }),
+        put(ownerToken, po._id, { status: 'approved', quantity: 20 }),
         put(ownerToken, po._id, { status: 'rejected' }),
       ]);
-      const codes = results.map((r) => r.status).sort();
-      expect(codes).toEqual([200, 409, 409]);
+      expect(results.map((r) => r.status).sort()).toEqual([200, 409, 409]);
 
       const winner = results.find((r) => r.status === 200).body.recommendation;
       const after = await stored(po);
@@ -235,11 +243,34 @@ describe('atomic transitions', () => {
     }
   });
 
-  test('a missing or malformed id is still 404, an unrelated PO is 409', async () => {
-    expect((await put(staffToken, new mongoose.Types.ObjectId(), { optimalReorderQty: 5 })).status).toBe(404);
-    expect((await put(staffToken, 'not-an-id', { optimalReorderQty: 5 })).status).toBe(404);
+  test('a missing or malformed id is 404, an unrelated PO is 409', async () => {
+    expect((await put(staffToken, new mongoose.Types.ObjectId(), { quantity: 5 })).status).toBe(404);
+    expect((await put(staffToken, 'not-an-id', { quantity: 5 })).status).toBe(404);
     const ordered = await addPo('Ordered');
-    expect((await put(staffToken, ordered._id, { optimalReorderQty: 5 })).status).toBe(409);
+    expect((await put(staffToken, ordered._id, { quantity: 5 })).status).toBe(409);
     expect((await stored(ordered)).requested_quantity).toBe(77);
+  });
+});
+
+describe('GET labels', () => {
+  test('each stored state maps to new, adjusted, approved or rejected', async () => {
+    const states = ['AI_Draft', 'Adjusted', 'Pending', 'Approved', 'Ordered', 'Shipped', 'Received', 'Cancelled'];
+    const pos = {};
+    for (const st of states) pos[st] = await addPo(st);
+
+    const res = await get(staffToken);
+
+    expect(res.status).toBe(200);
+    const label = Object.fromEntries(res.body.recommendations.map((r) => [r.orderStatus, r.status]));
+    expect(label).toEqual({
+      AI_Draft: 'new',
+      Adjusted: 'adjusted',
+      Pending: 'approved',
+      Approved: 'approved',
+      Ordered: 'approved',
+      Shipped: 'approved',
+      Received: 'approved',
+      Cancelled: 'rejected',
+    });
   });
 });

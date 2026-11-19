@@ -149,14 +149,9 @@ export const getRecommendations = async (req, res) => {
         }).populate('supplier_id').populate('medicine_id').sort({ createdAt: -1 });
 
         const mapped = purchaseOrders.map(r => {
-            let status = 'pending';
-            if (r.order_status === 'Adjusted') {
-                status = 'adjusted';
-            } else if (r.order_status === 'Pending' || r.order_status === 'Approved' || r.order_status === 'Ordered') {
-                status = 'approved';
-            } else if (r.order_status === 'Cancelled') {
-                status = 'rejected';
-            }
+            // Review label: new (untouched forecast draft), adjusted (edited by a person), rejected, or
+            // approved (it became a real purchase order, whatever stage that order has reached since)
+            const status = { AI_Draft: 'new', Adjusted: 'adjusted', Cancelled: 'rejected' }[r.order_status] || 'approved';
 
             const priorityRaw = r.ai_forecast_reference?.priority || 'Medium';
             const priority = priorityRaw.toLowerCase();
@@ -249,34 +244,34 @@ const parseQuantity = (value, field) => {
 
 const invalidUpdate = (res, message) => res.status(400).json({ success: false, message, errorCode: 'INVALID_INPUT' });
 
+// PUT body: { status?, quantity?, priority?, restockingDate? }
+//   status 'approved' -> Pending (a real purchase order; any edits in the same request are applied first)
+//   status 'rejected' -> Cancelled (takes no edits)
+//   no status         -> the edits are applied and the draft becomes Adjusted
 export const updateRecommendation = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, approvedQty, optimalReorderQty, priority, restockingDate } = req.body || {};
+        const { status, quantity, priority, restockingDate } = req.body || {};
 
         // Validate the body first; nothing is read or written until it is known to be good
-        const approved = parseQuantity(approvedQty, 'approvedQty');
-        const optimal = parseQuantity(optimalReorderQty, 'optimalReorderQty');
-        if (approved.error || optimal.error) return invalidUpdate(res, approved.error || optimal.error);
-        if (status !== undefined && status !== null && status !== '' &&
-            !['approved', 'rejected', 'adjusted', 'pending'].includes(status)) {
-            return invalidUpdate(res, 'status must be one of approved, rejected, adjusted or pending');
+        if (status !== undefined && !['approved', 'rejected'].includes(status)) {
+            return invalidUpdate(res, 'status must be approved or rejected (leave it out to adjust the draft)');
         }
+        const { qty, error: qtyError } = parseQuantity(quantity, 'quantity');
+        if (qtyError) return invalidUpdate(res, qtyError);
+        const hasEdits = qty !== null || Boolean(priority) || Boolean(restockingDate);
+        if (status === 'rejected' && hasEdits) return invalidUpdate(res, 'a rejection takes no other changes');
+        if (!status && !hasEdits) return invalidUpdate(res, 'nothing to update');
 
         const $set = {};
-        // Approving takes the approved quantity first; every other change takes the reorder quantity first
-        const qty = status === 'approved' ? approved.qty ?? optimal.qty : optimal.qty ?? approved.qty;
-
         if (status === 'approved') {
             $set.order_status = { $literal: 'Pending' };
             $set.approved_by = { $literal: new mongoose.Types.ObjectId(req.user.id) };
         } else if (status === 'rejected') {
             $set.order_status = { $literal: 'Cancelled' };
-        } else if (status === 'adjusted' || (qty !== null && !status)) {
-            // A quantity change with no status is an adjustment too
+        } else {
             $set.order_status = { $literal: 'Adjusted' };
         }
-        // status 'pending' (or none, without a quantity) leaves the status as it is
 
         if (qty !== null) {
             $set.requested_quantity = { $literal: qty };
@@ -301,9 +296,7 @@ export const updateRecommendation = async (req, res) => {
         const filter = mongoose.isValidObjectId(id) ? { _id: id, order_status: { $in: REVIEWABLE_STATUSES } } : null;
         let draft = null;
         if (filter) {
-            draft = Object.keys($set).length
-                ? await PurchaseOrder.findOneAndUpdate(filter, [{ $set }], { returnDocument: 'after', updatePipeline: true })
-                : await PurchaseOrder.findOne(filter); // nothing to change; still a draft?
+            draft = await PurchaseOrder.findOneAndUpdate(filter, [{ $set }], { returnDocument: 'after', updatePipeline: true });
         }
         if (!draft) {
             const existing = filter ? await PurchaseOrder.findById(id).select('order_status').lean() : null;
