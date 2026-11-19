@@ -83,9 +83,9 @@ The list endpoints and `/generate` also return `lastGeneratedAt` (this process's
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/excel` | owner, staff | `multipart/form-data`, field `file` (.xlsx/.xls, ≤ 5 MB). Imports medicines and batches. |
+| POST | `/excel` | owner, staff | `multipart/form-data`, field `file` (.xlsx/.xls, ≤ 5 MB). Imports medicines and batches. The `supplier` cell is a supplier name or id; rows with an unknown supplier fail and are listed in `uploadLog.errors`. |
 | GET | `/` | any | Upload history (from `AuditLog`) |
-| GET | `/export` | any | Download inventory as Excel |
+| GET | `/export` | any | Download inventory as Excel (supplier column holds the supplier name) |
 | GET | `/:id` | any | One upload log |
 
 ## Suppliers and purchase orders — `/api/suppliers`

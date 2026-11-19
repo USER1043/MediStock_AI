@@ -254,6 +254,13 @@ const ExcelUpload = () => {
                             <span>{uploadResult.log.anomalies.length} anomalies detected</span>
                           </div>
                         )}
+                        {uploadResult.log.errors?.length > 0 && (
+                          <ul className="mt-3 max-h-40 overflow-y-auto space-y-1 text-sm text-red-700 list-disc list-inside">
+                            {uploadResult.log.errors.map(e => (
+                              <li key={e.row}>{e.message}</li>
+                            ))}
+                          </ul>
+                        )}
                         {uploadResult.forecastsDeferred && (
                           <div className="mt-3 flex items-center gap-2 text-blue-700 text-sm">
                             <FaInfoCircle />
@@ -292,6 +299,11 @@ const ExcelUpload = () => {
                   <li>Use YYYY-MM-DD format for expiry dates</li>
                   <li>Prices should be numbers (no ₹ symbol)</li>
                   <li>If a medicine+batch already exists, its quantity will be added</li>
+                  <li>
+                    <code className="font-mono text-xs bg-gray-100 px-1 rounded">supplier</code> must be the name of a
+                    supplier already on the Suppliers page (case does not matter). Rows with an unknown supplier are
+                    skipped. Leave it blank to keep a medicine's current supplier.
+                  </li>
                   <li>Max file size: 5 MB</li>
                 </ul>
               </div>

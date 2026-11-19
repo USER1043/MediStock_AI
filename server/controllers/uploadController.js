@@ -2,8 +2,12 @@ import XLSX from 'xlsx';
 import fs from 'fs';
 import { Medicine } from '../models/medicineModel.js';
 import { AuditLog } from '../models/auditLogModel.js';
-import { detectAnomalies, addStockToBatches, requestPath, getStockStatus } from '../utils/helpers.js';
+import { detectAnomalies, addStockToBatches, requestPath, getStockStatus, excelRowNumber } from '../utils/helpers.js';
+import { buildSupplierLookup, supplierDisplayNames } from '../utils/supplierRef.js';
 import log from '../utils/logger.js';
+
+// Row errors kept in the audit entry (the response carries all of them)
+const MAX_STORED_ROW_ERRORS = 100;
 
 // Upload Excel file
 export const uploadExcel = async (req, res) => {
@@ -27,10 +31,24 @@ export const uploadExcel = async (req, res) => {
 
     let recordsSuccessful = 0;
     let recordsFailed = 0;
+    const rowErrors = []; // { row, message }; row is the Excel row number (header = row 1), as in the anomalies
+
+    // Suppliers are matched in memory: one query for the whole import
+    const suppliers = await buildSupplierLookup();
 
     // Process records
-    for (const row of data) {
+    for (const [index, row] of data.entries()) {
       try {
+        // Resolve the supplier first so a bad one fails the row before any stock changes
+        const supplier = suppliers.resolve(row.supplier);
+        if (supplier.notFound || supplier.ambiguous) {
+          throw new Error(
+            supplier.notFound
+              ? `supplier '${supplier.text}' not found — add it on the Suppliers page first`
+              : `supplier '${supplier.text}' matches more than one supplier — use the supplier id instead`
+          );
+        }
+
         const categoryString = row.category || 'Uncategorized';
 
         // Check if medicine already exists based on parent name
@@ -48,6 +66,8 @@ export const uploadExcel = async (req, res) => {
           });
           // Update total quantity
           existingMedicine.quantity += parseInt(row.quantity) || 0;
+          // A blank supplier cell keeps the current supplier
+          if (supplier.id) existingMedicine.supplier = supplier.id;
           // Bump __v so concurrent bills/adjustments (which check it) see this stock change
           existingMedicine.increment();
           await existingMedicine.save();
@@ -60,6 +80,7 @@ export const uploadExcel = async (req, res) => {
             reorderLevel: row.reorderLevel || 50,
             purchasePrice: row.purchasePrice,
             sellingPrice: row.sellingPrice,
+            ...(supplier.id ? { supplier: supplier.id } : {}),
             batches: [{
               batchNumber: String(row.batchNumber),
               expiryDate: row.expiryDate,
@@ -71,7 +92,9 @@ export const uploadExcel = async (req, res) => {
         recordsSuccessful++;
       } catch (error) {
         recordsFailed++;
-        log('WARN', 'Failed to process row', { error: error.message });
+        const rowNumber = excelRowNumber(row, index);
+        rowErrors.push({ row: rowNumber, message: `Row ${rowNumber}: ${error.message}` });
+        log('WARN', 'Failed to process row', { row: rowNumber, error: error.message });
       }
     }
 
@@ -88,6 +111,7 @@ export const uploadExcel = async (req, res) => {
         recordsSuccessful,
         recordsFailed,
         anomalies,
+        errors: rowErrors.slice(0, MAX_STORED_ROW_ERRORS),
       },
       ipAddress: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown',
       httpMethod: 'POST',
@@ -113,7 +137,8 @@ export const uploadExcel = async (req, res) => {
       recordsSuccessful,
       recordsFailed,
       status: recordsFailed === 0 ? 'success' : 'partial',
-      anomalies
+      anomalies,
+      errors: rowErrors,
     };
 
     res.status(200).json({
@@ -194,6 +219,7 @@ export const getUploadLog = async (req, res) => {
       recordsSuccessful: auditLog.details?.recordsSuccessful || 0,
       recordsFailed: auditLog.details?.recordsFailed || 0,
       anomalies: auditLog.details?.anomalies || [],
+      errors: auditLog.details?.errors || [],
       uploadedBy: auditLog.userId,
       status: auditLog.details?.recordsFailed === 0 ? 'success' : 'partial',
       createdAt: auditLog.timestamp
@@ -218,6 +244,9 @@ export const exportExcel = async (req, res) => {
   try {
     const medicines = await Medicine.find().lean();
 
+    // Medicine.supplier holds a Supplier _id; the sheet shows (and re-imports) the supplier name
+    const supplierName = await supplierDisplayNames(medicines.map(m => m.supplier));
+
     // Flatten batches into rows for export
     const rows = [];
     medicines.forEach(m => {
@@ -233,7 +262,7 @@ export const exportExcel = async (req, res) => {
           sellingPrice: m.sellingPrice,
           rackNumber: 'N/A',
           reorderLevel: m.reorderLevel,
-          supplier: m.supplier || 'Default',
+          supplier: supplierName(m.supplier),
           stockStatus: getStockStatus(m.quantity, m.reorderLevel),
         });
       } else {
@@ -248,7 +277,7 @@ export const exportExcel = async (req, res) => {
             sellingPrice: m.sellingPrice,
             rackNumber: b.rackNumber,
             reorderLevel: m.reorderLevel,
-            supplier: m.supplier || 'Default',
+            supplier: supplierName(m.supplier),
             stockStatus: getStockStatus(m.quantity, m.reorderLevel),
           });
         });
