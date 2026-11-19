@@ -327,4 +327,34 @@ describe.each(topologies)('Billing concurrency on a %s', (_label, startServer, e
 
     console.log(`[${_label}] bills + adjustments: ${JSON.stringify(countStatuses(results))}`);
   });
+
+  // Without retries only a few requests win the race above, so this variant retries on conflict like a real
+  // client. Stock covers every bill and write-off even before any restock lands, so every request must succeed.
+  it('applies every bill and stock adjustment exactly once when clients retry on conflict', async () => {
+    const med = await createMedicine('Pantoprazole 40mg', [
+      { batchNumber: 'P-EARLY', expiresInDays: 25, quantity: 40 },
+      { batchNumber: 'P-LATE', expiresInDays: 250, quantity: 40 },
+    ]);
+    const restockBatch = med.batches.find((b) => b.batchNumber === 'P-LATE');
+    const kinds = Array.from({ length: LOAD }, (_, i) => (i % 4 === 0 ? 'restock' : i % 4 === 1 ? 'writeoff' : 'bill'));
+    const count = (kind) => kinds.filter((k) => k === kind).length;
+
+    const results = await Promise.all(
+      kinds.map((kind) =>
+        withRetry(() =>
+          kind === 'restock' ? adjust(med._id, 5, restockBatch)
+            : kind === 'writeoff' ? adjust(med._id, -2)
+              : bill([{ medicineId: med._id.toString(), quantity: 3 }])
+        )
+      )
+    );
+
+    expect(countStatuses(results)).toEqual({ 200: count('restock') + count('writeoff'), 201: count('bill') });
+    const final = await expectConsistentStock(med._id);
+    expect(final.quantity).toBe(80 + 5 * count('restock') - 2 * count('writeoff') - 3 * count('bill'));
+    expect(await soldUnits(med._id)).toBe(3 * count('bill'));
+    expect(await historyTotal(med._id, 'sale')).toBe(negated(3 * count('bill')));
+    expect(await historyTotal(med._id, 'adjustment')).toBe(5 * count('restock') - 2 * count('writeoff'));
+    expect(await Bill.countDocuments()).toBe(count('bill'));
+  });
 });

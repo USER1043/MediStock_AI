@@ -14,8 +14,9 @@ let existingAlerts = [];
 jest.unstable_mockModule('../models/alertModel.js', () => ({
   Alert: {
     deleteMany: jest.fn(async () => ({})),
-    findOne: jest.fn(async ({ medicineId, alertType }) =>
-      existingAlerts.find((a) => a.medicineId === medicineId && a.alertType === alertType) || null
+    // Matches every field in the query, like MongoDB would (including isResolved)
+    findOne: jest.fn(async (query) =>
+      existingAlerts.find((a) => Object.entries(query).every(([k, v]) => a[k] === v)) || null
     ),
     create: jest.fn(async (doc) => {
       createdAlerts.push(doc);
@@ -157,5 +158,42 @@ describe('generateAlerts expiry alerts', () => {
     await runGenerateAlerts();
 
     expect(createdAlerts.some((a) => a.alertType === 'near_expiry')).toBe(false);
+  });
+
+  it('creates a new expiry alert when the earlier one was resolved', async () => {
+    medicines = [
+      medicine({
+        batches: [{ batchNumber: 'SOON-1', expiryDate: daysFromNow(2), quantity: 20, rackNumber: 'R1' }],
+      }),
+    ];
+    existingAlerts = [{ medicineId: 'med-1', alertType: 'near_expiry', isResolved: true }];
+
+    await runGenerateAlerts();
+
+    expect(createdAlerts.filter((a) => a.alertType === 'near_expiry')).toHaveLength(1);
+  });
+});
+
+// Pins the day-counting rule. Expiry dates from the inventory form are stored as UTC midnight of that day,
+// and days left = ceil((expiry - now) / 1 day), so a batch counts as expired from 00:00 UTC on its expiry date.
+describe('expiry day boundaries', () => {
+  const NOW = new Date('2026-11-19T10:00:00Z');
+  const onDay = (isoDate) => [{ batchNumber: isoDate, expiryDate: new Date(`${isoDate}T00:00:00Z`), quantity: 5 }];
+
+  beforeEach(() => {
+    jest.useFakeTimers({ now: NOW, doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask', 'setTimeout', 'setInterval'] });
+  });
+  afterEach(() => jest.useRealTimers());
+
+  it.each([
+    ['2026-11-18', 'expired'], // yesterday
+    ['2026-11-19', 'expired'], // today: already past 00:00 UTC
+    ['2026-11-20', 'nearExpiry'], // tomorrow: 1 day left
+    ['2026-11-26', 'nearExpiry'], // 7 days left: still inside the 7-day window
+    ['2026-11-27', 'none'], // 8 days left
+  ])('a batch expiring on %s is %s', (isoDate, expected) => {
+    const { nearExpiry, expired } = getExpiringBatches(onDay(isoDate), 7);
+    const actual = expired.length ? 'expired' : nearExpiry.length ? 'nearExpiry' : 'none';
+    expect(actual).toBe(expected);
   });
 });
