@@ -11,6 +11,9 @@ import {
   describePasswordPolicyFailures,
 } from '../utils/passwordPolicy.js';
 
+// Never sent to a client: excluded from queries (`select: false`) and from toJSON
+export const SECRET_FIELDS = ['password', 'twoFactorSecret'];
+
 const userSchema = new mongoose.Schema(
   {
     username: {
@@ -30,9 +33,11 @@ const userSchema = new mongoose.Schema(
     // plain text; on findByIdAndUpdate (updateUser) the validators see the hash, so
     // the controller checks the policy itself. The custom message keeps the plain
     // password out of the error (Mongoose's default minlength message includes it).
+    // `select: false`: queries leave it out unless they ask for `+password` (login does).
     password: {
       type: String,
       required: true,
+      select: false,
       minlength: [PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters`],
     },
     role: {
@@ -44,9 +49,12 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // TOTP secret. Left out of queries unless they ask for `+twoFactorSecret`
+    // (only the 2FA login check does). `isTwoFactorEnabled` is the public flag.
     twoFactorSecret: {
       type: String,
       default: '',
+      select: false,
     },
     isTwoFactorEnabled: {
       type: Boolean,
@@ -61,7 +69,17 @@ const userSchema = new mongoose.Schema(
       default: Date.now,
     },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Second line of defence: even a document loaded with `+password` or
+    // `+twoFactorSecret` never serialises them (res.json calls toJSON).
+    toJSON: {
+      transform(doc, ret) {
+        for (const field of SECRET_FIELDS) delete ret[field];
+        return ret;
+      },
+    },
+  }
 );
 
 // Hashes user password if it has been modified.
@@ -89,7 +107,8 @@ userSchema.pre('save', async function () {
   this.password = await bcryptjs.hash(this.password, salt);
 });
 
-// Verifies if the entered password matches the stored password.
+// Verifies if the entered password matches the stored password. The document must
+// have been loaded with `.select('+password')`.
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcryptjs.compare(enteredPassword, this.password);
 };

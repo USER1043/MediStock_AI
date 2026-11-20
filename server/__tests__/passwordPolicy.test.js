@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import {
   PASSWORD_MIN_LENGTH,
+  PASSWORD_MAX_BYTES,
   PASSWORD_RULES,
   getPasswordPolicyFailures,
   describePasswordPolicyFailures,
@@ -14,9 +15,17 @@ import {
 const failures = getPasswordPolicyFailures;
 
 describe('password policy', () => {
-  test('rules are minLength, lowercase, uppercase, number, symbol (in that order), min length 8', () => {
+  test('rules are minLength, maxBytes, lowercase, uppercase, number, symbol (in that order), 8 characters to 72 bytes', () => {
     expect(PASSWORD_MIN_LENGTH).toBe(8);
-    expect(PASSWORD_RULES.map((rule) => rule.id)).toEqual(['minLength', 'lowercase', 'uppercase', 'number', 'symbol']);
+    expect(PASSWORD_MAX_BYTES).toBe(72);
+    expect(PASSWORD_RULES.map((rule) => rule.id)).toEqual([
+      'minLength',
+      'maxBytes',
+      'lowercase',
+      'uppercase',
+      'number',
+      'symbol',
+    ]);
   });
 
   test('a password meeting every rule passes', () => {

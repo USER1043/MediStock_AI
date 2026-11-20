@@ -69,11 +69,11 @@ erDiagram
     USER {
         string username "unique"
         string email "unique"
-        string password "bcrypt hash"
+        string password "bcrypt hash, select false"
         string role "owner | staff"
         boolean isActive
         boolean isTwoFactorEnabled
-        string twoFactorSecret
+        string twoFactorSecret "select false"
     }
     SUPPLIER {
         string supplier_name "unique"
@@ -139,7 +139,7 @@ erDiagram
 | `Medicine` (`medicineModel.js`) | Product master + embedded batches | inventory, upload, billing, PO receive | `{ expiryDate: 1 }` (see limitations) |
 | `Bill` (`billModel.js`) | Sales invoice with embedded line items | billing | `billNumber` unique |
 | `Customer` (`customerModel.js`) | Customer contact + lifetime totals | customers | `phone` unique |
-| `User` (`userModel.js`) | Login accounts; password hashed in `pre('save')` | auth | `username`, `email` unique |
+| `User` (`userModel.js`) | Login accounts; password hashed in `pre('save')`; `password` and `twoFactorSecret` are `select: false` and stripped by `toJSON` | auth | `username`, `email` unique |
 | `Supplier` (`supplierModels.js`) | Supplier directory + performance score | suppliers, PO receive | `supplier_name` unique |
 | `PurchaseOrder` (`supplierModels.js`) | Drafts and live orders | forecast, suppliers | `order_number` unique |
 | `InventoryHistory` (`inventoryHistoryModel.js`) | Append-only stock movement ledger | billing, adjust | — |

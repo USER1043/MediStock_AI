@@ -9,6 +9,9 @@
  *
  * A password must contain:
  * - at least 8 characters, counted as Unicode code points (an emoji counts as 1);
+ * - at most 72 bytes in UTF-8. bcrypt ignores everything after the 72nd byte, so a
+ *   longer password would match any password sharing its first 72 bytes. ASCII
+ *   characters are 1 byte, accented letters 2 (é), most other scripts 3 and emoji 4;
  * - a lowercase letter: any Unicode lowercase letter (a-z, but also é, ß, ж ...);
  * - an uppercase letter: any Unicode uppercase letter (A-Z, but also É, Ж ...);
  * - a number: any Unicode decimal digit (0-9, but also ٣ ...);
@@ -25,6 +28,11 @@
  */
 
 export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_BYTES = 72;
+
+// UTF-8 byte length (the same count as Node's Buffer.byteLength(password, 'utf8')).
+// TextEncoder exists in both Node and browsers, so this file runs in both.
+const utf8Bytes = (password) => new TextEncoder().encode(password).length;
 
 const LOWERCASE = /\p{Ll}/u;
 const UPPERCASE = /\p{Lu}/u;
@@ -39,6 +47,12 @@ export const PASSWORD_RULES = [
     label: `At least ${PASSWORD_MIN_LENGTH} characters`,
     requirement: `be at least ${PASSWORD_MIN_LENGTH} characters`,
     test: (password) => Array.from(password).length >= PASSWORD_MIN_LENGTH,
+  },
+  {
+    id: 'maxBytes',
+    label: `At most ${PASSWORD_MAX_BYTES} bytes (accented letters and emoji count as 2 to 4)`,
+    requirement: `be at most ${PASSWORD_MAX_BYTES} bytes`,
+    test: (password) => utf8Bytes(password) <= PASSWORD_MAX_BYTES,
   },
   {
     id: 'lowercase',
@@ -80,9 +94,13 @@ export function getPasswordPolicyFailures(password) {
 const joinWithAnd = (items) =>
   items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 
+// Rules about size; every other rule is something the password must include
+const SIZE_RULES = ['minLength', 'maxBytes'];
+
 /**
  * Builds a sentence naming what is missing, e.g.
  * "Password must be at least 8 characters and include an uppercase letter and a symbol."
+ * or "Password must be at most 72 bytes."
  * Returns an empty string when nothing failed.
  * @param {string[]} failures rule ids from getPasswordPolicyFailures
  * @returns {string}
@@ -91,9 +109,8 @@ export function describePasswordPolicyFailures(failures) {
   if (!failures || failures.length === 0) return '';
   const failed = PASSWORD_RULES.filter((rule) => failures.includes(rule.id));
   const parts = [];
-  const length = failed.find((rule) => rule.id === 'minLength');
-  if (length) parts.push(length.requirement);
-  const missing = failed.filter((rule) => rule.id !== 'minLength').map((rule) => rule.requirement);
+  failed.filter((rule) => SIZE_RULES.includes(rule.id)).forEach((rule) => parts.push(rule.requirement));
+  const missing = failed.filter((rule) => !SIZE_RULES.includes(rule.id)).map((rule) => rule.requirement);
   if (missing.length > 0) parts.push(`include ${joinWithAnd(missing)}`);
   return `Password must ${parts.join(' and ')}.`;
 }

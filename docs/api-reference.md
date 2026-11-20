@@ -18,11 +18,11 @@ Base URL (local): `http://localhost:5000/api`
 |--------|------|------|-------------|
 | POST | `/login` | public | `{username, password}` → `{token, user}` or `{requires2FA: true, username}` |
 | POST | `/login/verify-2fa` | public | `{username, token}` (TOTP) → `{token, user}` |
-| GET | `/me` | any | Current user |
+| GET | `/me` | any | Current user (`isTwoFactorEnabled`, never `password` or `twoFactorSecret`) |
 | POST | `/2fa/setup` | any | → `{qrCodeUrl, secret}` (not saved yet) |
 | POST | `/2fa/verify-setup` | any | `{token, secret}` → enables 2FA |
-| POST | `/register` | owner | `{username, email, password, role?}` — create a user. A password that breaks the [policy](security.md#passwords) → `400 {errorCode: "WEAK_PASSWORD", message, failedRules}` |
-| GET | `/users` | owner | List users |
+| POST | `/register` | owner | `{username, email, password, role?}` — create a user. A password that breaks the [policy](security.md#passwords) (8+ characters, at most 72 bytes, lower, upper, number, symbol) → `400 {errorCode: "WEAK_PASSWORD", message, failedRules}` |
+| GET | `/users` | owner | List users (same fields as `/me`, no secrets) |
 | PUT | `/users/:id` | owner | Update username, email, role, isActive or password (same password policy and `400` as `/register`) |
 | DELETE | `/users/:id` | owner | Delete a staff user (not yourself, not another owner) |
 

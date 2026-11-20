@@ -115,8 +115,9 @@ export const login = async (req, res) => {
       });
     }
 
-    // Find user
-    const user = await User.findOne({ username });
+    // Find user. The hash is select: false, so ask for it. Login only compares:
+    // it never applies the password policy.
+    const user = await User.findOne({ username }).select('+password');
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -224,7 +225,8 @@ function getPermissionsByRole(role) {
 // Get current user with permissions
 export const getCurrentUser = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    // password and twoFactorSecret are select: false, so they are not loaded
+    const user = await User.findById(req.user.id);
 
     if (!user) {
       return res.status(404).json({
@@ -260,7 +262,7 @@ export const getCurrentUser = async (req, res) => {
 // Get all users (Owner only)
 export const getAllUsers = async (req, res) => {
   try {
-    const users = await User.find().select('-password').sort({ createdAt: -1 });
+    const users = await User.find().sort({ createdAt: -1 });
 
     const usersWithDisplayInfo = users.map(user => ({
       id: user._id,
@@ -347,7 +349,7 @@ export const updateUser = async (req, res) => {
       id,
       updateData,
       { returnDocument: 'after', runValidators: true }
-    ).select('-password');
+    );
 
     if (!user) {
       return res.status(404).json({
@@ -486,6 +488,7 @@ export const verify2FASetup = async (req, res) => {
     });
 
     if (verified) {
+      // twoFactorSecret is select: false; setting it still saves it
       user.twoFactorSecret = secret;
       user.isTwoFactorEnabled = true;
       await user.save();
@@ -510,7 +513,7 @@ export const verify2FALogin = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Provide username and 2FA token' });
     }
 
-    const user = await User.findOne({ username });
+    const user = await User.findOne({ username }).select('+twoFactorSecret');
     if (!user || !user.isTwoFactorEnabled) {
       return res.status(400).json({ success: false, message: 'Invalid 2FA request' });
     }
