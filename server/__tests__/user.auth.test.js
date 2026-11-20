@@ -60,6 +60,9 @@ const runUpdateUserInNode = async (uri, req) => {
   return JSON.parse(stdout);
 };
 
+// password and twoFactorSecret are select: false; tests that inspect them ask for them
+const SECRETS = '+password +twoFactorSecret';
+
 const BCRYPT_HASH = /^\$2[aby]\$10\$.{53}$/;
 
 // Meets the password policy (utils/passwordPolicy.js)
@@ -116,14 +119,14 @@ describe('User model and auth controller', () => {
       expect(user.password).not.toBe(OWNER_PASSWORD);
       expect(user.password).toMatch(BCRYPT_HASH);
 
-      const stored = await User.findById(user._id).lean();
+      const stored = await User.findById(user._id).select(SECRETS).lean();
       expect(stored.password).toBe(user.password);
       expect(stored.password).toMatch(BCRYPT_HASH);
     });
 
     test('matchPassword accepts the right password and rejects a wrong one', async () => {
       await createOwner();
-      const user = await User.findOne({ username: 'owner' });
+      const user = await User.findOne({ username: 'owner' }).select(SECRETS);
 
       await expect(user.matchPassword(OWNER_PASSWORD)).resolves.toBe(true);
       await expect(user.matchPassword('wrong-password')).resolves.toBe(false);
@@ -137,7 +140,7 @@ describe('User model and auth controller', () => {
       user.isActive = false;
       await user.save();
 
-      const reloaded = await User.findById(created._id);
+      const reloaded = await User.findById(created._id).select(SECRETS);
       expect(reloaded.isActive).toBe(false);
       expect(reloaded.password).toBe(originalHash);
       await expect(reloaded.matchPassword(OWNER_PASSWORD)).resolves.toBe(true);
@@ -147,11 +150,11 @@ describe('User model and auth controller', () => {
       const created = await createOwner();
       const originalHash = created.password;
 
-      const user = await User.findById(created._id);
+      const user = await User.findById(created._id).select(SECRETS);
       user.password = 'New-Secret-456';
       await user.save();
 
-      const reloaded = await User.findById(created._id);
+      const reloaded = await User.findById(created._id).select(SECRETS);
       expect(reloaded.password).not.toBe(originalHash);
       expect(reloaded.password).not.toBe('New-Secret-456');
       expect(reloaded.password).toMatch(BCRYPT_HASH);
@@ -174,10 +177,10 @@ describe('User model and auth controller', () => {
 
       // Changing an existing user's password to a weak one is rejected too
       const created = await createOwner();
-      const user = await User.findById(created._id);
+      const user = await User.findById(created._id).select(SECRETS);
       user.password = 'weakpass';
       await expect(user.save()).rejects.toThrow(mongoose.Error.ValidationError);
-      expect((await User.findById(created._id).lean()).password).toBe(created.password);
+      expect((await User.findById(created._id).select(SECRETS).lean()).password).toBe(created.password);
     });
 
     test('the model minlength (8) error does not echo the password', async () => {
@@ -208,7 +211,7 @@ describe('User model and auth controller', () => {
       expect(regRes.body.success).toBe(true);
       expect(regRes.body.user).toMatchObject({ username: 'staff1', email: 'staff1@test.local', role: 'staff' });
 
-      const stored = await User.findOne({ username: 'staff1' }).lean();
+      const stored = await User.findOne({ username: 'staff1' }).select(SECRETS).lean();
       expect(stored.password).toMatch(BCRYPT_HASH);
 
       const loginRes = mockRes();
@@ -316,7 +319,7 @@ describe('User model and auth controller', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.user.password).toBeUndefined();
 
-      const stored = await User.findById(staff._id).lean();
+      const stored = await User.findById(staff._id).select(SECRETS).lean();
       expect(stored.password).toMatch(BCRYPT_HASH);
       expect(stored.password).not.toBe(staff.password);
       await expect(bcryptjs.compare('New-Staff-456', stored.password)).resolves.toBe(true);
@@ -350,7 +353,7 @@ describe('User model and auth controller', () => {
       });
 
       // Nothing in the request was applied
-      const stored = await User.findById(staff._id).lean();
+      const stored = await User.findById(staff._id).select(SECRETS).lean();
       expect(stored.password).toBe(staff.password);
       expect(stored.email).toBe('staff@test.local');
 
@@ -376,7 +379,7 @@ describe('User model and auth controller', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.user).toMatchObject({ email: 'staff-new@test.local', role: 'owner' });
 
-      const stored = await User.findById(staff._id).lean();
+      const stored = await User.findById(staff._id).select(SECRETS).lean();
       expect(stored.email).toBe('staff-new@test.local');
       expect(stored.role).toBe('owner');
       expect(stored.password).toBe(staff.password);
@@ -401,7 +404,7 @@ describe('User model and auth controller', () => {
       expect(verifyRes.statusCode).toBe(200);
       expect(verifyRes.body.success).toBe(true);
 
-      const stored = await User.findById(owner._id).lean();
+      const stored = await User.findById(owner._id).select(SECRETS).lean();
       expect(stored.isTwoFactorEnabled).toBe(true);
       expect(stored.twoFactorSecret).toBe(secret);
       // Enabling 2FA must not touch the password hash
@@ -436,7 +439,7 @@ describe('User model and auth controller', () => {
       await verify2FASetup(mockReq({ body: { token: wrong, secret }, user: reqUser }), res);
 
       expect(res.statusCode).toBe(400);
-      const stored = await User.findById(owner._id).lean();
+      const stored = await User.findById(owner._id).select(SECRETS).lean();
       expect(stored.isTwoFactorEnabled).toBe(false);
     });
   });
