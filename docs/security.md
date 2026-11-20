@@ -40,16 +40,18 @@ sequenceDiagram
 2. The user scans the QR code in an authenticator app, then `POST /api/auth/2fa/verify-setup {token, secret}`.
 3. If the code verifies, the secret is saved to `twoFactorSecret` and `isTwoFactorEnabled` is set to `true`.
 
+The secret never leaves the server after that. `twoFactorSecret` and `password` are `select: false` in the User schema, so no query loads them unless it asks (`.select('+password')` in login, `.select('+twoFactorSecret')` in `/login/verify-2fa`), and the schema's `toJSON` strips both even from a document loaded with them. Responses carry only the `isTwoFactorEnabled` flag.
+
 Saving the secret only after a successful verification means a half-finished setup can't lock the user out.
 
 ### Passwords
 
-- **Policy for new passwords:** at least 8 characters, with a lowercase letter, an uppercase letter, a number and a symbol. A symbol is any character that isn't a letter, a digit or whitespace. Unicode letters and digits count (`é` is lowercase, `É` uppercase, `٣` a number), and length is counted in code points. The rule lives in `server/utils/passwordPolicy.js`, with an identical copy in `src/utils/passwordPolicy.js` for the forms; a test fails if the two differ.
-  - `register` and `PUT /users/:id` check it on the plain password and answer `400` with `errorCode: "WEAK_PASSWORD"`, a message naming what's missing, and `failedRules`.
+- **Policy for new passwords:** at least 8 characters and at most 72 bytes, with a lowercase letter, an uppercase letter, a number and a symbol. A symbol is any character that isn't a letter, a digit or whitespace. Unicode letters and digits count (`é` is lowercase, `É` uppercase, `٣` a number), and the minimum is counted in code points. The maximum is counted in UTF-8 bytes because bcrypt ignores everything after byte 72, so two longer passwords sharing their first 72 bytes would both match. ASCII characters are 1 byte, accented letters such as `é` 2, most other scripts 3 and emoji 4, so 37 × `é` (74 bytes) is too long. The rule lives in `server/utils/passwordPolicy.js`, with an identical copy in `src/utils/passwordPolicy.js` for the forms; a test fails if the two differ.
+  - `register` and `PUT /users/:id` check it on the plain password and answer `400` with `errorCode: "WEAK_PASSWORD"`, a message naming what's missing (e.g. `Password must be at most 72 bytes.`), and `failedRules` (`minLength`, `maxBytes`, `lowercase`, `uppercase`, `number`, `symbol`).
   - The User `pre('save')` hook also rejects a weak new password (a `ValidationError`), so scripts that call `User.create` are covered.
-  - Login never checks it, so accounts with older passwords can still sign in.
+  - Login never checks it, so accounts with older passwords can still sign in. It only compares the hash.
 - Hashed with **bcryptjs** (salt rounds 10) in a Mongoose `pre('save')` hook, only when the password field changed.
-- Compared with `user.matchPassword()`.
+- Compared with `user.matchPassword()`, on a user loaded with `.select('+password')`.
 - Login returns the same `Invalid credentials` message for an unknown user and a wrong password, so usernames can't be enumerated through that message.
 
 ---
@@ -162,7 +164,7 @@ Allowed origins come from `FRONTEND_URL` (comma-separated). Requests with no `Or
 These are known gaps, roughly in order of severity:
 
 1. **The 2FA step is not bound to the password step.** `POST /api/auth/login/verify-2fa` accepts `{username, token}` alone and issues a JWT. Anyone holding a user's current TOTP code can log in without the password. The fix is to have `/login` return a short-lived, single-purpose "pre-auth" token that `/verify-2fa` must present.
-2. **TOTP secrets are returned by the API.** `GET /api/auth/me` and `GET /api/auth/users` exclude only `password`, so `twoFactorSecret` is included in their responses. Secrets are also stored in plaintext.
+2. **TOTP secrets are stored in plaintext** in `twoFactorSecret`. They are never returned by the API (see [Enabling 2FA](#enabling-2fa)), but anyone with database access can read them.
 3. **Tokens can't be revoked.** Logout only clears `localStorage`. Deactivating a user doesn't invalidate their existing JWT, and `protect` never re-checks `isActive`.
 4. **The JWT is stored in `localStorage`**, which any XSS on the origin can read.
 5. **No rate limiting or lockout** on `/login` or `/login/verify-2fa`, so passwords and 6-digit codes can be brute-forced.
@@ -173,7 +175,7 @@ These are known gaps, roughly in order of severity:
 
 ## Future improvements
 
-- Pre-auth token for 2FA; encrypt `twoFactorSecret` at rest and exclude it from all queries (`select: false` in the schema).
+- Pre-auth token for 2FA; encrypt `twoFactorSecret` at rest.
 - Short-lived access token (about 15 min) plus a rotating **refresh token in an `httpOnly`, `SameSite` cookie**, and a token version on `User` so deactivation or role changes revoke access immediately.
 - `express-rate-limit` on auth routes; account lockout after repeated failures.
 - `helmet`, request validation, and sanitised error messages in production.
