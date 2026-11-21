@@ -52,7 +52,6 @@ export const AUDIT_ROUTES = {
     'POST /api/suppliers': entry('SUPPLIER_CREATED', 'Suppliers'),
     'POST /api/suppliers/suppliers': entry('SUPPLIER_CREATED', 'Suppliers'),
     'PUT /api/suppliers/suppliers/:id': entry('SUPPLIER_UPDATED', 'Suppliers'),
-    'POST /api/suppliers/reorder/generate': entry('REORDER_GENERATED', 'Orders'),
     'POST /api/suppliers/purchase-orders': entry('ORDER_CREATED', 'Orders'),
     'PUT /api/suppliers/purchase-orders/:id': entry('ORDER_STATUS_UPDATE', 'Orders'),
 

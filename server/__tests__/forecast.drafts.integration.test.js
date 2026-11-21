@@ -1,6 +1,6 @@
 /**
  * Forecast → AI draft PO integration tests.
- * Runs the forecast handler and the rule-based reorder generator against a real in-memory MongoDB,
+ * Runs the forecast handler against a real in-memory MongoDB,
  * once on a standalone server (insert-then-delete path) and once on a single-node replica set
  * (transaction path). Medicines have no sales history, so computeForecast takes its cold-start
  * path (no LSTM training) and the numbers are deterministic for given parameters.
@@ -15,7 +15,6 @@ jest.unstable_mockModule('../utils/logger.js', () => ({
 }));
 
 const { runForecast, triggerRetraining } = await import('../controllers/forecastController.js');
-const { generateReorderSuggestions } = await import('../controllers/supplierController.js');
 const { Medicine } = await import('../models/medicineModel.js');
 const { PurchaseOrder, Supplier } = await import('../models/supplierModels.js');
 const { ForecastParameters } = await import('../models/forecastModel.js');
@@ -275,24 +274,5 @@ describe.each(topologies)('Forecast drafts on %s', (label, startServer) => {
     expect(res.statusCode).toBe(200);
     expect(res.body.count).toBe(0);
     expect(await draftIds()).toEqual([]);
-  });
-
-  describe('generateReorderSuggestions', () => {
-    test('creates a High-priority draft for an out-of-stock medicine', async () => {
-      await createSupplier();
-      await createMedicine({ name: 'Out of stock', quantity: 0, reorderLevel: 40 });
-      await createMedicine({ name: 'Half stocked', quantity: 30, reorderLevel: 40 });
-
-      const res = mockRes();
-      await generateReorderSuggestions(mockReq('/api/suppliers/reorder/generate'), res);
-
-      expect(res.statusCode).toBe(200);
-      expect(res.body.count).toBe(2);
-      const drafts = await PurchaseOrder.find({ order_status: 'AI_Draft' }).lean();
-      const byName = Object.fromEntries(drafts.map((d) => [d.medicine_name, d]));
-      expect(byName['Out of stock'].ai_forecast_reference.priority).toBe('High');
-      expect(byName['Out of stock'].requested_quantity).toBe(60);
-      expect(byName['Half stocked'].ai_forecast_reference.priority).toBe('Medium');
-    });
   });
 });

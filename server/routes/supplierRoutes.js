@@ -4,7 +4,6 @@ import {
   createSupplier,
   getAllSuppliers,
   updateSupplier,
-  generateReorderSuggestions,
   getReorderSuggestions,
   createPurchaseOrder,
   getAllPurchaseOrders,
@@ -18,8 +17,7 @@ router.post('/suppliers', protect, ownerOnly, createSupplier);
 router.get('/suppliers', protect, authorize('owner', 'staff'), getAllSuppliers);
 router.put('/suppliers/:id', protect, ownerOnly, updateSupplier);
 
-// Reorder suggestion routes (All staff can view and generate)
-router.post('/reorder/generate', protect, authorize('owner', 'staff'), generateReorderSuggestions);
+// Reorder drafts (AI_Draft POs from the forecast run): owner and staff can view
 router.get('/reorder/suggestions', protect, authorize('owner', 'staff'), getReorderSuggestions);
 
 // Purchase order routes (Owner approves, staff can view)

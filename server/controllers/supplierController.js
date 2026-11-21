@@ -1,7 +1,6 @@
 import { Supplier, PurchaseOrder } from '../models/supplierModels.js';
 import { Medicine } from '../models/medicineModel.js';
 import log from '../utils/logger.js';
-import { isMedicineLowStock, stockLevelOf } from '../utils/stockLevel.js';
 
 // ============ SUPPLIER MANAGEMENT ============
 
@@ -115,104 +114,23 @@ export const updateSupplier = async (req, res) => {
   }
 };
 
-// ============ REORDER SUGGESTIONS (NOW WRITES TO DRAFT POs) ============
+// ============ REORDER DRAFTS ============
 
-export const generateReorderSuggestions = async (req, res) => {
-  try {
-    // Medicines at or below their reorder level (utils/stockLevel.js)
-    const medicines = (await Medicine.find()).filter(isMedicineLowStock);
-
-    const drafts = [];
-
-    for (const medicine of medicines) {
-      const aiDemandForecast = Math.ceil(medicine.reorderLevel * 1.5);
-      const suggestedQuantity = aiDemandForecast - medicine.quantity;
-      if (!(suggestedQuantity > 0)) continue; // e.g. reorder level 0: nothing sensible to order
-
-      // Find top supplier for this medicine category
-      const supplier = await Supplier.findOne({
-        medicine_categories: medicine.category,
-        is_active: true,
-      }).sort({ delivery_performance_score: -1 });
-
-      if (!supplier) continue; // Skip if no supplier found
-
-      // Determine priority. Out of stock is the most urgent case, but the PO priority enum is
-      // Low | Medium | High (shared with forecast drafts and the Forecast Review filter), so it maps to High.
-      // out / critical -> High, low -> Medium
-      const level = stockLevelOf(medicine);
-      const priority = level === 'out' || level === 'critical' ? 'High' : 'Medium';
-
-      const orderNumber = `PO-AI-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      const totalAmount = suggestedQuantity * medicine.purchasePrice;
-
-      // Create a PurchaseOrder in AI_Draft state natively
-      const draft = await PurchaseOrder.create({
-        order_number: orderNumber,
-        medicine_id: medicine._id,
-        medicine_name: medicine.name,
-        supplier_id: supplier._id,
-        requested_quantity: suggestedQuantity,
-        unit_price: medicine.purchasePrice,
-        total_amount: totalAmount,
-        expected_delivery_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Next week
-        order_status: 'AI_Draft',
-        created_by: req.user.id,
-        ai_forecast_reference: {
-          demand_predicted: aiDemandForecast,
-          forecast_date: new Date(),
-          priority
-        }
-      });
-
-      drafts.push(draft);
-    }
-
-    log('INFO', 'AI Draft POs generated', { count: drafts.length, userId: req.user.id });
-
-    // Mock response shape to match old ReorderSuggestions for front-end backwards compatibility
-    const suggestions = drafts.map(d => ({
-        _id: d._id,
-        medicine_id: { _id: d.medicine_id, name: d.medicine_name },
-        medicine_name: d.medicine_name,
-        current_stock: 0, // Mocked
-        reorder_level: 0, // Mocked
-        suggested_quantity: d.requested_quantity,
-        ai_demand_forecast: d.ai_forecast_reference.demand_predicted,
-        suggested_suppliers: [{ supplier_id: { supplier_name: "Mapped Supplier" }, estimated_price: d.unit_price }],
-        priority: d.ai_forecast_reference.priority,
-        status: 'Pending'
-    }));
-
-    res.status(200).json({
-      success: true,
-      message: 'Reorder drafts generated successfully',
-      count: drafts.length,
-      suggestions,
-    });
-  } catch (error) {
-    log('ERROR', 'Generate reorder drafts error', { error: error.message });
-    res.status(500).json({
-      success: false,
-      message: 'Error generating reorder drafts',
-      error: error.message,
-    });
-  }
-};
-
+// Lists the AI_Draft purchase orders. Only the forecast run (owner-only, /api/forecast/run) and a manual
+// recommendation create them; this route just reads them, with the medicine's current stock and reorder level.
 export const getReorderSuggestions = async (req, res) => {
   try {
-    // The UI is asking for suggestions. We fetch POs in AI_Draft status.
     const drafts = await PurchaseOrder.find({ order_status: 'AI_Draft' })
-        .populate('supplier_id', 'supplier_name contact_info');
-    
-    // Polyfill shape for frontend
+        .populate('supplier_id', 'supplier_name contact_info')
+        .populate('medicine_id', 'name quantity reorderLevel');
+
     const suggestions = drafts.map(d => ({
         _id: d._id,
-        medicine_id: { _id: d.medicine_id, name: d.medicine_name },
+        medicine_id: { _id: d.medicine_id?._id ?? null, name: d.medicine_id?.name ?? d.medicine_name },
         medicine_name: d.medicine_name,
-        current_stock: 0, 
-        reorder_level: 0, 
+        // null when the medicine has since been deleted
+        current_stock: d.medicine_id?.quantity ?? null,
+        reorder_level: d.medicine_id?.reorderLevel ?? null,
         suggested_quantity: d.requested_quantity,
         ai_demand_forecast: d.ai_forecast_reference?.demand_predicted || d.requested_quantity,
         suggested_suppliers: [{ supplier_id: d.supplier_id, estimated_price: d.unit_price }],

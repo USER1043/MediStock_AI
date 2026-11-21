@@ -294,14 +294,16 @@ describe('suppliers and purchase orders', () => {
     });
   });
 
-  test('generating reorders, placing a PO and updating it are REORDER_GENERATED / ORDER_CREATED / ORDER_STATUS_UPDATE', async () => {
-    await addSupplier();
-    await addMedicine({ quantity: 3, batches: [{ batchNumber: 'LOW', expiryDate: daysFromNow(200), quantity: 3, rackNumber: 'R1' }] });
-
-    const { res } = await expectOneEntry(() => api().post('/api/suppliers/reorder/generate'), {
-      status: 200, action: 'REORDER_GENERATED', module: 'Orders', endpoint: '/api/suppliers/reorder/generate', method: 'POST',
+  test('placing a PO from a draft and updating it are ORDER_CREATED / ORDER_STATUS_UPDATE', async () => {
+    const supplier = await addSupplier();
+    const medicine = await addMedicine({ quantity: 3, batches: [{ batchNumber: 'LOW', expiryDate: daysFromNow(200), quantity: 3, rackNumber: 'R1' }] });
+    // Drafts come from the forecast run, which writes its own entry; create one directly here
+    const draft = await PurchaseOrder.create({
+      order_number: 'PO-AI-TEST-1', medicine_id: medicine._id, medicine_name: medicine.name, supplier_id: supplier._id,
+      requested_quantity: 12, unit_price: 2, total_amount: 24, expected_delivery_date: daysFromNow(7),
+      order_status: 'AI_Draft', created_by: owner._id,
     });
-    const draftId = res.body.suggestions[0]._id;
+    const draftId = draft._id.toString();
 
     await expectOneEntry(() => api().post('/api/suppliers/purchase-orders').send({ suggestion_id: draftId }), {
       status: 201, action: 'ORDER_CREATED', module: 'Orders', endpoint: '/api/suppliers/purchase-orders', method: 'POST',
