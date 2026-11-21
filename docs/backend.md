@@ -136,7 +136,7 @@ Uncaught errors reach `errorHandler`, which returns `{ success: false, message }
 - **Logging:** use `log(level, message, data)` from `utils/logger.js` rather than `console.*`. Levels are `INFO`, `WARN` and `ERROR`.
 - **Audit rows for new routes:** every new `POST`/`PUT`/`PATCH`/`DELETE` route needs a row in `AUDIT_ROUTES` (an action and module from the `AuditLog` enums, or a skip); add new actions or modules to `AUDIT_ACTIONS` / `AUDIT_MODULES` and to `src/pages/ActivityLog.jsx`. The coverage test checks all three.
 - **Explicit audit entries:** for richer detail than the generic middleware captures, call `createAuditEntry({...})` from the controller and mark the route as a skip in `AUDIT_ROUTES` so it is logged once. Login, Excel upload, forecast run/retrain and alert resolve do this.
-- **Generated identifiers:** bills are `BILL-<timestamp>-<random>`; AI purchase orders are `PO-AI-<timestamp>-<random>`.
+- **Generated identifiers:** bills are `BILL-<ms timestamp>-<8 random hex chars>` and AI draft purchase orders (forecast run and manual recommendations) `PO-AI-<ms timestamp>-<8 random hex chars>`, both from `utils/helpers.js` (`crypto.randomBytes`). Seeded data uses counters instead (`BILL-SEED-1000`, `PO-SEED-1000`, `PO-AI-SEED-1001`, ...).
 
 ---
 
