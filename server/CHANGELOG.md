@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.3.0](https://github.com/USER1043/MediStock_AI/compare/backend-v1.2.1...backend-v1.3.0) (2026-11-21)
+
+
+### Features
+
+* **alerts:** generate alerts lazily, clear them automatically, treat resolve as acknowledge ([d88a9f5](https://github.com/USER1043/MediStock_AI/commit/d88a9f5d5c99411ecb74696767acc7c3bf257dc1))
+* **alerts:** raise one near_expiry/expired alert per batch ([4e35596](https://github.com/USER1043/MediStock_AI/commit/4e35596d86d6f3696e85d0329f156205eeb055e9))
+* **alerts:** re-raise an acknowledged batch alert when its expiry date is edited ([276fc61](https://github.com/USER1043/MediStock_AI/commit/276fc6160d7cd7615512ce3a3e1ccb181f75e9ca))
+* **auth:** enforce a password policy for new passwords ([c4f87e0](https://github.com/USER1043/MediStock_AI/commit/c4f87e02e79bba10d5bfb347e80e046aed5d7a02))
+
+
+### Bug Fixes
+
+* **alerts:** detect near-expiry and expired stock per batch ([2ac319a](https://github.com/USER1043/MediStock_AI/commit/2ac319aba448fe5387e422169d123e97f7dff6ab))
+* **alerts:** use returnDocument: 'after' in resolveAlert ([ddd09db](https://github.com/USER1043/MediStock_AI/commit/ddd09dbf3b16cbcfd5a037c96c394749aecb2a4e))
+* **audit:** record the real action and full endpoint for every write ([9e4d3a1](https://github.com/USER1043/MediStock_AI/commit/9e4d3a175a4ff8628cb8755a435f932218390f9e))
+* **audit:** redact secrets at any depth and by key name pattern ([1a69d71](https://github.com/USER1043/MediStock_AI/commit/1a69d7187acf34b7ac86c4523fab6846b97c5382))
+* **auth:** hash new passwords in updateUser with a static bcryptjs import ([003e87b](https://github.com/USER1043/MediStock_AI/commit/003e87bb51f59db811ea20168694fbf20dcb268c))
+* **auth:** keep password and twoFactorSecret out of queries and JSON ([751bfb6](https://github.com/USER1043/MediStock_AI/commit/751bfb6b590f208c1dac490caea063bfef35d523))
+* **auth:** make the User pre-save hook work on Mongoose 9 ([a6a2c62](https://github.com/USER1043/MediStock_AI/commit/a6a2c629305f334fe41731177fe0d47ce66b98cd))
+* **auth:** reject new passwords over 72 bytes (bcrypt's limit) ([30fc221](https://github.com/USER1043/MediStock_AI/commit/30fc2212612c7fdba3a2a756e20c0b79a0f38e79))
+* **customers:** harden update, search and delete ([3f999ed](https://github.com/USER1043/MediStock_AI/commit/3f999ed24b978a8c0877e9f1278dc642a0226aa1))
+* **forecast:** make retrain owner-only and skip it for staff imports ([2880a34](https://github.com/USER1043/MediStock_AI/commit/2880a34949bddf9a2d45903931330a5476dded68))
+* **forecast:** quantity-only recommendation PUT adjusts the draft; make the transition atomic ([a14b55f](https://github.com/USER1043/MediStock_AI/commit/a14b55f0a6515b69ed92b885e247d073070a08e2))
+* **forecast:** save AI drafts with valid priorities and never lose old drafts ([1403db8](https://github.com/USER1043/MediStock_AI/commit/1403db82642787b259e6d99b2b795d54fd4c337f))
+* **forecast:** staff review drafts, only the owner approves or deletes them ([3b842cc](https://github.com/USER1043/MediStock_AI/commit/3b842ccc748a6fc4cac6f37c7f3917249390a31a))
+* **import:** report row errors and anomalies by their Excel row number ([9ed498f](https://github.com/USER1043/MediStock_AI/commit/9ed498f7902338a674cc1fc973a20ff35633c5f7))
+* **import:** resolve Excel supplier names to Supplier ids and export names ([7e9155d](https://github.com/USER1043/MediStock_AI/commit/7e9155d47ad349fc66542ff17144768ccb1ee958))
+* **inventory:** store medicine suppliers as supplier ids ([8c38428](https://github.com/USER1043/MediStock_AI/commit/8c38428c00b5854456fbebc0f5ee6f0a2cea2820))
+* **reorder:** give out-of-stock reorder drafts a valid priority ([d27121f](https://github.com/USER1043/MediStock_AI/commit/d27121f79f1a3034eb9e99a7aa8e74f9601cb97f))
+* **reorders:** remove the rule-based draft generator; show live stock on drafts ([758f20f](https://github.com/USER1043/MediStock_AI/commit/758f20f2c3b41f6da25b7756089fb5638c896808))
+* **seed:** never seed activity later than the moment the seed runs ([bd688d7](https://github.com/USER1043/MediStock_AI/commit/bd688d7f7044ce0505759ef8ce2fce4666ac03f5))
+* **stock:** one shared stock-level definition (out/critical/low/ok) for every low-stock path ([c885ed8](https://github.com/USER1043/MediStock_AI/commit/c885ed812704e56ec16b6acfcc7e9175b11cd476))
+
 ## [1.2.1](https://github.com/USER1043/MediStock_AI/compare/backend-v1.2.0...backend-v1.2.1) (2026-10-25)
 
 
