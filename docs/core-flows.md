@@ -130,7 +130,7 @@ sequenceDiagram
 
 Details of the model and reorder formula: [forecasting.md](forecasting.md).
 
-There is also a simpler, rule-based path: `POST /api/suppliers/reorder/generate` creates `AI_Draft` POs for every medicine at or below its reorder level, sized at `1.5 × reorderLevel − quantity` (skipped when that is not positive), priority High for `out` / `critical` and Medium for `low` stock, choosing the category supplier with the best `delivery_performance_score`.
+The forecast run (and a manual recommendation) is the only way drafts are created. The Reorders page (`GET /api/suppliers/reorder/suggestions`) lists the current `AI_Draft` POs with each medicine's current stock and reorder level.
 
 ### Edge cases
 
@@ -148,7 +148,7 @@ There is also a simpler, rule-based path: `POST /api/suppliers/reorder/generate`
 
 ```mermaid
 stateDiagram-v2
-    [*] --> AI_Draft: forecast run /<br/>reorder generate /<br/>manual recommendation
+    [*] --> AI_Draft: forecast run /<br/>manual recommendation
     AI_Draft --> Pending: owner approves (forecast review)<br/>or createPurchaseOrder
     AI_Draft --> Adjusted: quantity adjusted (staff or owner)
     Adjusted --> Pending: owner approves

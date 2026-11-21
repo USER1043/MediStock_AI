@@ -30,7 +30,6 @@ export const AUDIT_ACTIONS = [
   // Suppliers and orders
   'SUPPLIER_CREATED',
   'SUPPLIER_UPDATED',
-  'REORDER_GENERATED',
   'ORDER_CREATED',
   'ORDER_STATUS_UPDATE',
   // Categories

@@ -43,7 +43,6 @@ const ACTION_OPTIONS = [
     // Suppliers and orders
     { value: 'SUPPLIER_CREATED', label: '🏭 Supplier Created', bg: 'bg-indigo-100', text: 'text-indigo-700' },
     { value: 'SUPPLIER_UPDATED', label: '🏭 Supplier Updated', bg: 'bg-indigo-100', text: 'text-indigo-700' },
-    { value: 'REORDER_GENERATED', label: '📋 Reorders Generated', bg: 'bg-violet-100', text: 'text-violet-700' },
     { value: 'ORDER_CREATED', label: '🛒 Order Created', bg: 'bg-violet-100', text: 'text-violet-700' },
     { value: 'ORDER_STATUS_UPDATE', label: '🔄 Order Status Update', bg: 'bg-fuchsia-100', text: 'text-fuchsia-700' },
     // Categories

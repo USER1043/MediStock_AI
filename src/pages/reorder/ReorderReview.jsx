@@ -46,20 +46,6 @@ const ReorderReview = () => {
     }
   };
 
-  const generateSuggestions = async () => {
-    try {
-      setLoading(true);
-      const res = await axiosInstance.post('/suppliers/reorder/generate');
-      alert(`Generated ${res.data.suggestions.length} reorder suggestions`);
-      fetchData();
-    } catch (error) {
-      console.error('Error generating suggestions:', error);
-      alert(error.response?.data?.message || 'Error generating suggestions');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleCreateOrder = (suggestion) => {
     setSelectedSuggestion(suggestion);
     setOrderForm({
@@ -138,17 +124,9 @@ const ReorderReview = () => {
 
   return (
     <div className="p-6">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-800">Reorder Management</h1>
-            <p className="text-gray-600 mt-2">AI-powered reorder suggestions and purchase orders</p>
-          </div>
-          <button
-            onClick={generateSuggestions}
-            className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700"
-          >
-            🤖 Generate AI Suggestions
-          </button>
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold text-gray-800">Reorder Management</h1>
+          <p className="text-gray-600 mt-2">Draft orders from the demand forecast, and purchase orders</p>
         </div>
 
         {/* Tabs */}
@@ -205,11 +183,11 @@ const ReorderReview = () => {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <div>
                     <p className="text-sm text-gray-600">Current Stock</p>
-                    <p className="text-lg font-semibold">{suggestion.current_stock}</p>
+                    <p className="text-lg font-semibold">{suggestion.current_stock ?? '—'}</p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Reorder Level</p>
-                    <p className="text-lg font-semibold">{suggestion.reorder_level}</p>
+                    <p className="text-lg font-semibold">{suggestion.reorder_level ?? '—'}</p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Suggested Quantity</p>
@@ -245,7 +223,7 @@ const ReorderReview = () => {
 
             {suggestions.length === 0 && (
               <div className="text-center py-12 text-gray-500">
-                No reorder suggestions. Click "Generate AI Suggestions" to analyze inventory.
+                No reorder suggestions. The owner creates them by running the forecast on the Forecast Setup page.
               </div>
             )}
           </div>

@@ -95,8 +95,7 @@ The list endpoints and `/generate` also return `lastGeneratedAt` (this process's
 | GET | `/suppliers` (also `/`) | owner, staff (`/`: any) | List suppliers |
 | POST | `/suppliers` (also `/`) | owner | Create supplier |
 | PUT | `/suppliers/:id` | owner | Update supplier |
-| POST | `/reorder/generate` | owner, staff | Rule-based `AI_Draft` POs for medicines at or below reorder level |
-| GET | `/reorder/suggestions` | owner, staff | Current `AI_Draft` POs in the legacy "suggestion" shape |
+| GET | `/reorder/suggestions` | owner, staff | Current `AI_Draft` POs (created by the forecast run) in the "suggestion" shape, with the medicine's live `current_stock` and `reorder_level` (`null` if the medicine was deleted) |
 | POST | `/purchase-orders` | owner | `{suggestion_id, expected_delivery_date?, notes?}`: activate a draft (→ `Pending`) |
 | GET | `/purchase-orders` | owner, staff | Non-draft POs; filter with `?status=&supplier_id=` |
 | PUT | `/purchase-orders/:id` | owner, staff | `{order_status, received_quantity?, actual_delivery_date?}`. `Received` adds stock as a new batch and updates the supplier score. |

@@ -96,7 +96,7 @@ sequenceDiagram
 | Stock intelligence (`/inventory/intelligence`) | ✅ | ❌ |
 | Sales and purchase reports | ✅ | ❌ |
 | Create/update suppliers | ✅ | ❌ |
-| Generate reorder drafts, update PO status | ✅ | ✅ |
+| View reorder drafts, update PO status | ✅ | ✅ |
 | Activate a PO from a draft (`POST /suppliers/purchase-orders`) | ✅ | ❌ |
 | Run or retrain the forecast (replaces all AI drafts), save forecast parameters | ✅ | ❌ |
 | View forecast recommendations, add a manual one, adjust a draft's quantity, priority or date | ✅ | ✅ |
