@@ -30,6 +30,9 @@ const { daysAgoDate, daysFutureDate } = createSeedClock();
 
 let billSeq = 1000;
 const nextBill = () => `BILL-SEED-${billSeq++}`;
+// Purchase-order numbers: a counter, like bill numbers (random 4-digit numbers could repeat)
+let poSeq = 1000;
+const nextPo = (prefix) => `${prefix}-SEED-${poSeq++}`;
 const SAMPLE_IPS = [
   "192.168.1.10",
   "192.168.1.21",
@@ -567,7 +570,7 @@ const seedDatabase = async () => {
       );
 
       purchaseOrders.push({
-        order_number: `PO-${rand(1000, 9999)}`,
+        order_number: nextPo('PO'),
         medicine_id: med._id,
         medicine_name: med.name,
         supplier_id: supplierDoc._id,
@@ -614,7 +617,7 @@ const seedDatabase = async () => {
         suppliers.find((s) => s._id.toString() === med.supplier) ||
         suppliers[0];
       purchaseOrders.push({
-        order_number: `PO-AI-${rand(1000, 9999)}`,
+        order_number: nextPo('PO-AI'),
         medicine_id: med._id,
         medicine_name: med.name,
         supplier_id: sup._id,
