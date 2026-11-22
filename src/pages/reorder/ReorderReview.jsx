@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from 'react';
 import axiosInstance from '../../utils/axiosConfig';
-import { FaExclamationTriangle, FaCheckCircle, FaTimesCircle, FaStar, FaShoppingCart } from 'react-icons/fa';
+import { FaStar, FaShoppingCart } from 'react-icons/fa';
 
 const ReorderReview = () => {
   const [suggestions, setSuggestions] = useState([]);

@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from 'react';
 import axiosInstance from '../../utils/axiosConfig';
-import { FaPlus, FaEdit, FaTrash, FaUser, FaShieldAlt, FaUserTie, FaKey, FaToggleOn, FaToggleOff, FaCheckCircle, FaRegCircle } from 'react-icons/fa';
+import { FaPlus, FaEdit, FaTrash, FaShieldAlt, FaUserTie, FaKey, FaToggleOn, FaToggleOff, FaCheckCircle, FaRegCircle } from 'react-icons/fa';
 import { PASSWORD_RULES, getPasswordPolicyFailures, describePasswordPolicyFailures } from '../../utils/passwordPolicy';
 
 const UserManagement = () => {

@@ -26,23 +26,12 @@ import {
   FaBoxes,
   FaExclamationTriangle,
   FaClock,
-  FaUsers,
   FaRupeeSign,
   FaFileInvoice,
   FaChartLine,
-  FaPills,
-  FaCloudUploadAlt,
-  FaBrain,
   FaFilter,
   FaSyncAlt,
   FaBell,
-  FaList,
-  FaMoneyBillWave,
-  FaTachometerAlt,
-  FaUsersCog,
-  FaFileUpload,
-  FaTruck,
-  FaClipboardList
 } from 'react-icons/fa';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
