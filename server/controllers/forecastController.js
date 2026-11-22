@@ -9,7 +9,7 @@ import { InventoryHistory } from '../models/inventoryHistoryModel.js';
 import { ForecastParameters } from '../models/forecastModel.js';
 import { PurchaseOrder, Supplier } from '../models/supplierModels.js';
 import { computeForecast } from '../ml/demandForecast.js';
-import { requestPath } from '../utils/helpers.js';
+import { requestPath, generateDraftOrderNumber } from '../utils/helpers.js';
 
 const DEFAULT_PARAMS = {
     forecastHorizon: 4,
@@ -76,9 +76,6 @@ const draftForecastOrders = async (req, res, action) => {
             dbParams = dbParams.toObject();
         }
 
-        // One timestamp per run plus an index keeps order numbers unique within the run
-        // (Date.now() plus a random 0-999 could repeat when several drafts are built in the same millisecond).
-        const runStamp = Date.now();
         const drafts = [];
         for (const med of medicines) {
             const forecast = await computeForecast(med, dbParams);
@@ -93,7 +90,7 @@ const draftForecastOrders = async (req, res, action) => {
                 if (!supplier) continue;
 
                 drafts.push(new PurchaseOrder({
-                    order_number: `PO-AI-${runStamp}-${drafts.length + 1}`,
+                    order_number: generateDraftOrderNumber(),
                     medicine_id: med._id,
                     medicine_name: med.name,
                     supplier_id: supplier._id,
@@ -196,7 +193,7 @@ export const createRecommendation = async (req, res) => {
         const capPriority = (priority || 'medium').charAt(0).toUpperCase() + (priority || 'medium').slice(1);
 
         const newPo = await PurchaseOrder.create({
-            order_number: `PO-AI-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            order_number: generateDraftOrderNumber(),
             medicine_id: medicineId || medicine?._id,
             medicine_name: medicineName || medicine?.name || 'Manual Item',
             supplier_id: supplier?._id,

@@ -7,6 +7,7 @@
  */
 
 import { jest } from '@jest/globals';
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { MongoMemoryServer, MongoMemoryReplSet } from 'mongodb-memory-server';
 
@@ -234,12 +235,15 @@ describe.each(topologies)('Forecast drafts on %s', (label, startServer) => {
     const second = await createMedicine({ name: 'Second', quantity: 0 });
     const oldIds = await createOldDrafts(second, supplier, 2);
 
-    // Pin the run's timestamp and occupy the second draft's order number with a non-draft PO,
-    // so the first new draft is written and the second hits the unique index.
+    // Pin the timestamp and the random part of order numbers (00000001, 00000002, ...), and occupy
+    // the second draft's number with a non-draft PO, so the first new draft is written and the
+    // second hits the unique index.
     const now = Date.now();
     jest.spyOn(Date, 'now').mockReturnValue(now);
+    let seq = 0;
+    jest.spyOn(crypto, 'randomBytes').mockImplementation(() => Buffer.from([0, 0, 0, ++seq]));
     await PurchaseOrder.create({
-      order_number: `PO-AI-${now}-2`,
+      order_number: `PO-AI-${now}-00000002`,
       medicine_id: second._id,
       supplier_id: supplier._id,
       requested_quantity: 1,

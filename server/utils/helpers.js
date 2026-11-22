@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 
@@ -142,10 +143,16 @@ export const formatCurrency = (amount) => {
   return `₹${parseFloat(amount).toFixed(2)}`;
 };
 
-// Generate bill number
-export const generateBillNumber = () => {
-  return `BILL-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-};
+// Unique document numbers: `<prefix>-<ms timestamp>-<8 random hex chars>`, e.g. BILL-1763700000000-3F9A0C12.
+// 32 random bits per millisecond make a collision practically impossible; the unique index on the
+// field still rejects one if it ever happens.
+const generateNumber = (prefix) => `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+
+// Bill numbers
+export const generateBillNumber = () => generateNumber('BILL');
+
+// AI draft purchase-order numbers (forecast run and manual recommendations)
+export const generateDraftOrderNumber = () => generateNumber('PO-AI');
 
 // Calculate demand forecast (mock)
 export const calculateDemandForecast = (salesData, days = 7) => {
