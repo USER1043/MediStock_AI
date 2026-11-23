@@ -32,7 +32,7 @@ const Hero = () => {
           {/* Badge */}
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/10 border border-white/20 rounded-full mb-6 backdrop-blur-sm">
             <FaBrain className="text-primary-300 text-sm" />
-            <span className="text-white/90 font-medium text-sm">Powered by Google Gemini AI</span>
+            <span className="text-white/90 font-medium text-sm">AI chatbot powered by Google Gemini</span>
           </div>
 
           {/* Heading */}

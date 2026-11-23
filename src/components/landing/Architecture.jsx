@@ -36,7 +36,7 @@ const layers = [
     color: 'from-purple-500 to-indigo-600',
     icon: SiGooglegemini,
     items: [
-      { name: 'Gemini 3.5 Flash-Lite', icon: SiGooglegemini, desc: 'Live inventory context' },
+      { name: 'Gemini 3.5 Flash-Lite', icon: SiGooglegemini, desc: 'Chatbot with inventory tool calls' },
     ],
   },
 ];
