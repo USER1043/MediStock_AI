@@ -5,7 +5,7 @@
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 
-const { findMentionedMedicines, prefetchForQuestion, buildFallbackAnswer, formatLookupsForModel, soundSkeleton } =
+const { findMentionedMedicines, prefetchForQuestion, analyzeQuestion, buildFallbackAnswer, formatLookupsForModel, soundSkeleton } =
   await import('../services/chatbotPrefetch.js');
 const { Medicine } = await import('../models/medicineModel.js');
 
@@ -100,6 +100,42 @@ describe('prefetchForQuestion', () => {
   test('nothing recognisable means no lookups, and the model uses its tools', async () => {
     expect(await prefetchForQuestion('hello there', [], NOW)).toEqual([]);
     expect(formatLookupsForModel([])).toBe('');
+  });
+});
+
+describe('categories and whether the lookups answer everything', () => {
+  test('an everyday word for a category lists its in-stock medicines', async () => {
+    const { lookups, covered } = await analyzeQuestion('anything for pain?', [], NOW);
+    expect(lookups.map((l) => [l.tool, l.args])).toEqual([['find_alternatives', { category: 'Analgesic' }]]);
+    expect(lookups[0].result.alternatives.map((m) => m.name)).toEqual(['Aspirin']); // expired paracetamol left out
+    expect(covered).toBe(true);
+    expect(buildFallbackAnswer(lookups)).toMatch(/^In stock \(Analgesic\):\n• Aspirin: 500 units/);
+  });
+
+  test.each([
+    'Do we have paracetamol?',
+    'Is Cetirizine available and which rack?',
+    'Which medicines are low on stock?',
+    'What is expiring in the next 30 days?',
+    'Do we have Dolo 650? If not, suggest something.',
+    "Give me today's sales",
+    'பாராசிட்டமால் இருக்கா?',
+  ])('covered: %s', async (question) => {
+    expect((await analyzeQuestion(question, [], NOW)).covered).toBe(true);
+  });
+
+  test.each([
+    ['can I give paracetamol to a child?', 'child'],
+    ['which is cheaper, aspirin or cetirizine?', 'cheaper'],
+    ['why is amoxicillin low?', 'why'],
+  ])('needs the model: %s', async (question, word) => {
+    const { covered, leftover } = await analyzeQuestion(question, [], NOW);
+    expect(covered).toBe(false);
+    expect(leftover).toContain(word);
+  });
+
+  test('nothing looked up is never covered', async () => {
+    expect((await analyzeQuestion('hello', [], NOW)).covered).toBe(false);
   });
 });
 

@@ -7,8 +7,10 @@
  * in ONE call instead of two to five tool round trips (each round trip is a slow, rate-limited request
  * on the free Gemini tier). The model still has the tools for anything the lookups missed.
  *
- * The same lookups power the offline answer (`buildFallbackAnswer`) when the model is unavailable, so
- * that answer follows the same stock and expiry rules as the model's (an expired batch is not stock).
+ * The same lookups power the direct answer (`buildFallbackAnswer`), with the same stock and expiry rules
+ * as the model's (an expired batch is not stock). It is used when the model is unavailable, and also
+ * instead of the model when the lookups already answer the whole question (`covered`), which keeps
+ * simple questions ("do we have X", "low stock?") from spending free-tier requests at all.
  */
 import { Medicine } from '../models/medicineModel.js';
 import { runTool } from './chatbotTools.js';
@@ -41,6 +43,41 @@ export const BRAND_TO_GENERIC = {
   omez: 'omeprazole', ocid: 'omeprazole',
   limcee: 'vitamin', celin: 'vitamin',
 };
+
+/**
+ * Everyday words for a category -> the inventory category they point to. Used only when a question
+ * names no medicine ("anything for acidity?"): the in-stock medicines of that category are listed.
+ * This maps words to the shop's shelf categories; it is not medical advice.
+ */
+export const CATEGORY_HINTS = {
+  acidity: 'Antacid', acid: 'Antacid', gastric: 'Antacid', heartburn: 'Antacid', ulcer: 'Antacid',
+  pain: 'Analgesic', painkiller: 'Analgesic', painkillers: 'Analgesic', fever: 'Analgesic', headache: 'Analgesic',
+  allergy: 'Antihistamine', allergies: 'Antihistamine', sneezing: 'Antihistamine',
+  infection: 'Antibiotic', infections: 'Antibiotic', antibiotics: 'Antibiotic',
+  diabetes: 'Antidiabetic', diabetic: 'Antidiabetic', sugar: 'Antidiabetic',
+  bp: 'Antihypertensive', hypertension: 'Antihypertensive', pressure: 'Antihypertensive',
+  cough: 'Cough Suppressant', inflammation: 'Anti-inflammatory', swelling: 'Anti-inflammatory',
+  skin: 'Topical', cream: 'Topical', ointment: 'Topical', vitamins: 'Vitamin', supplement: 'Vitamin', supplements: 'Vitamin',
+  அமிலம்: 'Antacid', வலி: 'Analgesic', காய்ச்சல்: 'Analgesic', ஒவ்வாமை: 'Antihistamine', இருமல்: 'Cough Suppressant',
+  சர்க்கரை: 'Antidiabetic', நீரிழிவு: 'Antidiabetic', தொற்று: 'Antibiotic', வைட்டமின்: 'Vitamin',
+};
+
+// Words that carry no request of their own: a question made only of these plus what was recognised
+// (medicine names, brands, categories, topics) is fully answered by the lookups
+const FILLER = new Set(`
+do does did we you they have has had is are was were be am any some the an of for in on at to from me us our my your
+please pls can could would tell show give list what whats which where how much many price prices cost costs rate mrp
+rack racks shelf location located stock stocks stocked available availability left remaining there units unit quantity
+qty still yet and or with now today currently current medicine medicines tablet tablets tab tabs drug drugs item items
+all every everything anything something any brand brands its it that this those these them same also too about status check if not else
+suggest something alternative alternatives other instead substitute options option kind type got keep kept
+mg ml syrup capsule capsules strip strips
+low running reorder out shortage restock expire expires expired expiring expiry expiries soon next within days day
+week weeks month months summary overview sales sold revenue business bill bills inventory hello hi hey thanks thank ok okay
+இருக்கா இருக்கிறதா உள்ளதா உள்ளது இருக்கு இருப்பு இருப்பில் என்ன எவ்வளவு விலை ரேக் எங்கே எங்க மருந்து மருந்துகள் மருந்துகளை
+இன்று இன்றைய தற்போது மாத்திரை மாத்திரைகள் உண்டா வேண்டும் சொல்லுங்கள் காட்டு பட்டியல் அது அதன் இது இதன் அவை எந்த
+குறைந்த குறைவு பற்றாக்குறை காலாவதி காலாவதியான காலாவதியாகும் சுருக்கம் விற்பனை நாட்கள் நாள்
+`.split(/\s+/).filter(Boolean));
 
 // Tamil consonants -> a rough Latin sound class (vowels are ignored on both sides)
 const TAMIL_CONSONANTS = {
@@ -100,29 +137,57 @@ const wordMatches = (q, n) => {
 };
 
 /**
- * Names of medicines the text mentions, best match first: medicines whose distinctive (first) name
- * word appears in the text. Reads only the names.
+ * What the text mentions, from the medicine names and categories only (no stock data is read):
+ * `names` (best match first: medicines whose distinctive first name word appears), `categories`
+ * (from category names or CATEGORY_HINTS) and `used`, the words of the text that were recognised.
  */
-export const findMentionedMedicines = async (text) => {
+export const analyzeMentions = async (text) => {
+  const raw = words(text);
+  if (raw.length === 0) return { names: [], categories: [], used: new Set() };
+  const medicines = await Medicine.find({}, 'name category').lean();
+  const used = new Set();
+
   // A brand name counts as a mention of its generic name
-  const qWords = words(text).flatMap((w) => (BRAND_TO_GENERIC[w] ? [w, BRAND_TO_GENERIC[w]] : [w]));
-  if (qWords.length === 0) return [];
-  const medicines = await Medicine.find({}, 'name').lean();
+  const candidates = raw.flatMap((w) => (BRAND_TO_GENERIC[w] ? [[w, w], [BRAND_TO_GENERIC[w], w]] : [[w, w]]));
   const hits = [];
   for (const { name } of medicines) {
     const first = words(name)[0];
     if (!first) continue;
-    const exact = qWords.includes(first);
-    if (exact || qWords.some((q) => wordMatches(q, first))) hits.push({ name, exact });
+    const matching = candidates.filter(([q]) => wordMatches(q, first));
+    if (matching.length) {
+      hits.push({ name, exact: matching.some(([q]) => q === first) });
+      for (const [, original] of matching) used.add(original);
+    }
   }
-  return hits
+  const names = hits
     .sort((a, b) => Number(b.exact) - Number(a.exact) || a.name.localeCompare(b.name))
     .map((h) => h.name)
     .slice(0, MAX_NAMED_LOOKUPS);
+
+  // Categories, by their own name ("antacid", "antibiotics") or an everyday word ("acidity")
+  const known = new Map();
+  for (const m of medicines) if (m.category) known.set(m.category.toLowerCase(), m.category);
+  const categories = [];
+  for (const w of raw) {
+    const hinted = CATEGORY_HINTS[w];
+    const direct = [...known.keys()].find((c) => words(c)[0] === w || words(c)[0] === w.replace(/s$/, ''));
+    const category = hinted ? known.get(hinted.toLowerCase()) : direct && known.get(direct);
+    if (category) {
+      used.add(w);
+      if (!categories.includes(category)) categories.push(category);
+    }
+  }
+  return { names, categories, used };
 };
+
+/** Names of medicines the text mentions, best match first (see analyzeMentions). */
+export const findMentionedMedicines = async (text) => (await analyzeMentions(text)).names;
 
 // A follow-up that points back at the previous question ("and its rack?", "அதன் விலை?")
 const REFERS_BACK = /\b(it|its|it's|that|this|those|these|them|they|same)\b|அது|அதன்|இது|இதன்|அவை/i;
+
+/** Does the question point back at the conversation ("and its rack?")? */
+export const refersBack = (message) => REFERS_BACK.test(message);
 
 const daysIn = (text) => {
   const m = String(text).match(/(\d{1,3})\s*(day|days|நாள்|நாட்கள்)/i);
@@ -130,11 +195,14 @@ const daysIn = (text) => {
 };
 
 /**
- * Runs the lookups the question clearly needs. Returns `[{ tool, args, result }]` (possibly empty),
- * in the order they were run. A follow-up that names nothing but points back ("and its rack?") reuses
- * the medicines named in the previous question.
+ * Runs the lookups the question clearly needs. Returns `{ lookups, covered }`: `lookups` is
+ * `[{ tool, args, result }]` (possibly empty) in the order they were run, and `covered` is true when
+ * every word of the question was recognised, so the lookups answer all of it and no model call is
+ * needed. A follow-up that names nothing but points back ("and its rack?") reuses the medicines named
+ * in the previous question. A question that names no medicine but a category ("anything for
+ * acidity?") lists that category's in-stock medicines.
  */
-export const prefetchForQuestion = async (message, history = [], now = new Date()) => {
+export const analyzeQuestion = async (message, history = [], now = new Date()) => {
   const lookups = [];
   const run = async (tool, args = {}) => {
     const result = await runTool(tool, args, now);
@@ -150,7 +218,8 @@ export const prefetchForQuestion = async (message, history = [], now = new Date(
     if (BRAND_TO_GENERIC[w]) lookups.push({ tool: 'brand_name', args: { brand: w }, result: { generic: BRAND_TO_GENERIC[w], note: 'Brand name; stock is kept under the generic name' } });
   }
 
-  let names = await findMentionedMedicines(message);
+  const mentions = await analyzeMentions(message);
+  let { names } = mentions;
   if (names.length === 0 && !wantsLow && !wantsExpiry && !wantsSummary && REFERS_BACK.test(message)) {
     const lastQuestion = [...history].reverse().find((t) => t.role === 'user')?.text;
     if (lastQuestion) names = await findMentionedMedicines(lastQuestion);
@@ -167,12 +236,31 @@ export const prefetchForQuestion = async (message, history = [], now = new Date(
   }
   for (const [category, exclude] of unavailableCategories) await run('find_alternatives', { category, exclude });
 
+  // A category without a named medicine: what is in stock there
+  if (names.length === 0) {
+    for (const category of mentions.categories.slice(0, 2)) await run('find_alternatives', { category });
+  }
+
   if (wantsLow) await run('list_low_stock');
   if (wantsExpiry) await run('list_expiring_batches', { days: daysIn(message) });
   if (wantsSummary) await run('get_inventory_summary');
 
-  return lookups;
+  const leftover = words(message).filter(
+    (w) => !FILLER.has(w) && !mentions.used.has(w) && !BRAND_TO_GENERIC[w] && !/^\d+$/.test(w) && !isTamilFiller(w)
+  );
+  const covered = lookups.some((l) => l.tool !== 'brand_name')
+    && lookups.every((l) => !l.result?.error)
+    && leftover.length === 0;
+  return { lookups, covered, leftover };
 };
+
+// Tamil words carry suffixes ("காலாவதியாகும்", "இருப்பிலுள்ள"); a known stem counts as filler
+const TAMIL_FILLER_STEMS = ['இருக்', 'இருப்', 'உள்ள', 'காலாவதி', 'குறை', 'விற்பனை', 'மருந்', 'விலை', 'ரேக்', 'எவ்வளவு', 'சுருக்க'];
+const isTamilFiller = (w) => isTamil(w) && TAMIL_FILLER_STEMS.some((stem) => w.startsWith(stem));
+
+/** The lookups only (see analyzeQuestion). */
+export const prefetchForQuestion = async (message, history = [], now = new Date()) =>
+  (await analyzeQuestion(message, history, now)).lookups;
 
 /** The lookups as text for the model, appended to the user's question. */
 export const formatLookupsForModel = (lookups) =>
@@ -193,9 +281,11 @@ const T = {
     brand: (b, g) => `${b[0].toUpperCase()}${b.slice(1)} is a brand of ${g}; stock is listed under ${g}.`,
     alternatives: (cat, list) => `In-stock ${cat} alternatives:\n${list}`,
     noAlternatives: (cat) => `No other ${cat} medicine is in stock.`,
+    inCategory: (cat, list) => `In stock (${cat}):\n${list}`,
+    noneInCategory: (cat) => `No ${cat} medicine is in stock.`,
     alt: (m) => `• ${m.name}: ${m.sellableQuantity} units, ₹${m.price}, rack ${m.activeBatches[0]?.rack || 'N/A'}`,
     lowHeader: 'Low stock (most urgent first):',
-    low: (m) => `• ${m.name}: ${m.totalQuantity} units (reorder at ${m.reorderLevel}, ${m.stockLevel})`,
+    low: (m) => `• ${m.name}: ${m.totalQuantity} units, rack ${m.rack} (reorder at ${m.reorderLevel}, ${m.stockLevel})`,
     lowNone: 'All medicines are above their reorder level.',
     expHeader: (d) => `Expired or expiring within ${d} days:`,
     exp: (b) => `• ${b.medicine} batch ${b.batch}, rack ${b.rack}: ${b.quantity} units, ${b.status === 'expired' ? `EXPIRED on ${b.expiry}` : `expires ${b.expiry} (${b.daysLeft} days)`}`,
@@ -212,9 +302,11 @@ const T = {
     brand: (b, g) => `${b} என்பது ${g} மருந்தின் பிராண்ட் பெயர்; இருப்பு ${g} பெயரில் உள்ளது.`,
     alternatives: (cat, list) => `இருப்பில் உள்ள ${cat} மாற்று மருந்துகள்:\n${list}`,
     noAlternatives: (cat) => `வேறு ${cat} மருந்து இருப்பில் இல்லை.`,
+    inCategory: (cat, list) => `இருப்பில் உள்ளவை (${cat}):\n${list}`,
+    noneInCategory: (cat) => `${cat} மருந்து எதுவும் இருப்பில் இல்லை.`,
     alt: (m) => `• ${m.name}: ${m.sellableQuantity} அலகுகள், ₹${m.price}, ரேக் ${m.activeBatches[0]?.rack || 'N/A'}`,
     lowHeader: 'குறைந்த இருப்பு (அவசரம் முதலில்):',
-    low: (m) => `• ${m.name}: ${m.totalQuantity} அலகுகள் (மறு ஆர்டர் நிலை ${m.reorderLevel})`,
+    low: (m) => `• ${m.name}: ${m.totalQuantity} அலகுகள், ரேக் ${m.rack} (மறு ஆர்டர் நிலை ${m.reorderLevel})`,
     lowNone: 'அனைத்து மருந்துகளும் போதுமான அளவில் உள்ளன.',
     expHeader: (d) => `காலாவதியானவை அல்லது ${d} நாட்களில் காலாவதியாகுபவை:`,
     exp: (b) => `• ${b.medicine} தொகுதி ${b.batch}, ரேக் ${b.rack}: ${b.quantity} அலகுகள், ${b.status === 'expired' ? `${b.expiry} அன்று காலாவதியானது` : `${b.expiry} அன்று காலாவதி (${b.daysLeft} நாட்கள்)`}`,
@@ -247,7 +339,9 @@ export const buildFallbackAnswer = (lookups, language = 'en') => {
       else parts.push(t.noStock(m));
     } else if (tool === 'find_alternatives') {
       const alts = result.alternatives || [];
-      parts.push(alts.length ? t.alternatives(result.category, withMore(t, alts.map(t.alt), result).join('\n')) : t.noAlternatives(result.category));
+      const list = withMore(t, alts.map(t.alt), result).join('\n');
+      if (args.exclude) parts.push(alts.length ? t.alternatives(result.category, list) : t.noAlternatives(result.category));
+      else parts.push(alts.length ? t.inCategory(result.category, list) : t.noneInCategory(result.category));
     } else if (tool === 'list_low_stock') {
       const low = result.lowStock || [];
       parts.push(low.length ? [t.lowHeader, ...withMore(t, low.map(t.low), result)].join('\n') : t.lowNone);

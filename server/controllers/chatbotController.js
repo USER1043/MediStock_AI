@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import axios from 'axios';
 import { runTool, TOOL_DECLARATIONS } from '../services/chatbotTools.js';
-import { buildFallbackAnswer, formatLookupsForModel, prefetchForQuestion } from '../services/chatbotPrefetch.js';
+import { analyzeQuestion, buildFallbackAnswer, formatLookupsForModel, refersBack } from '../services/chatbotPrefetch.js';
 import log from '../utils/logger.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -13,6 +14,8 @@ export const DEFAULT_GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-flash-lit
 
 /** The model may ask for tools this many times per question before it must answer. */
 export const MAX_TOOL_ROUNDS = 4;
+/** ...but only this many times when the server already sent data with the question. */
+export const MAX_TOOL_ROUNDS_WITH_DATA = 1;
 /** One Gemini call is abandoned after this long. */
 export const CALL_TIMEOUT_MS = 10_000;
 /** If a call has not answered after this long, the same request is also sent to the next model; the first answer wins. */
@@ -21,6 +24,91 @@ export const HEDGE_AFTER_MS = 4_000;
 export const ANSWER_DEADLINE_MS = 12_000;
 
 const userChatHistories = new Map(); // Store conversation memory per user
+
+// ── Free-tier request budget ─────────────────────────────────────────────
+// The free Gemini tier limits requests per minute and per day for each model. Requests are spent only
+// on questions that need the model, never on a model that just said it is out of quota, and never
+// twice on the same question about the same data.
+
+/** Models that answered 429/503, with the time they may be used again. */
+const modelCooldowns = new Map();
+const COOLDOWN_429_MS = 60_000;
+const COOLDOWN_503_MS = 15_000;
+
+// Gemini's 429 carries a RetryInfo detail such as { retryDelay: "37s" }
+const retryDelayMs = (error) => {
+  const details = error.response?.data?.error?.details || [];
+  const delay = details.map((d) => d.retryDelay).find(Boolean);
+  const seconds = delay ? parseFloat(delay) : NaN;
+  return Number.isFinite(seconds) ? Math.ceil(seconds * 1000) : null;
+};
+
+const coolDown = (model, error) => {
+  const status = error.response?.status;
+  if (status !== 429 && status !== 503) return;
+  const ms = (status === 429 && retryDelayMs(error)) || (status === 429 ? COOLDOWN_429_MS : COOLDOWN_503_MS);
+  modelCooldowns.set(model, Date.now() + ms);
+};
+
+const isCoolingDown = (model) => (modelCooldowns.get(model) || 0) > Date.now();
+
+/**
+ * Answers already given, keyed by the question and the exact data it was answered from, plus the
+ * conversation when the question points back at it ("and its price?"). Because the data is in the key,
+ * a cached answer is never stale: any stock change makes a new key.
+ */
+const answerCache = new Map();
+export const ANSWER_CACHE_TTL_MS = 5 * 60_000;
+const ANSWER_CACHE_MAX = 200;
+
+const cacheKey = (language, history, message, lookups) =>
+  createHash('sha1')
+    .update(JSON.stringify([
+      language,
+      refersBack(message) || lookups.length === 0 ? history : null,
+      message.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[?.!]+$/, ''),
+      lookups.map((l) => l.result),
+    ]))
+    .digest('hex');
+
+const cacheGet = (key) => {
+  const hit = answerCache.get(key);
+  if (!hit) return null;
+  if (hit.expires <= Date.now()) {
+    answerCache.delete(key);
+    return null;
+  }
+  return hit.text;
+};
+
+const cacheSet = (key, text) => {
+  if (answerCache.size >= ANSWER_CACHE_MAX) answerCache.delete(answerCache.keys().next().value); // oldest
+  answerCache.set(key, { text, expires: Date.now() + ANSWER_CACHE_TTL_MS });
+};
+
+/** One user may send this many questions a minute to the model; beyond that they are answered directly. */
+export const USER_MODEL_QUESTIONS_PER_MINUTE = 12;
+const userModelUse = new Map();
+
+const takeUserBudget = (userId) => {
+  const now = Date.now();
+  const recent = (userModelUse.get(userId) || []).filter((t) => now - t < 60_000);
+  if (recent.length >= USER_MODEL_QUESTIONS_PER_MINUTE) {
+    userModelUse.set(userId, recent);
+    return false;
+  }
+  recent.push(now);
+  userModelUse.set(userId, recent);
+  return true;
+};
+
+/** Tests only: clear the cache, cooldowns and per-user counters. */
+export const resetChatbotState = () => {
+  answerCache.clear();
+  modelCooldowns.clear();
+  userModelUse.clear();
+  userChatHistories.clear();
+};
 
 const geminiModels = () => {
   const list = (process.env.GEMINI_MODELS || '').split(',').map((m) => m.trim()).filter(Boolean);
@@ -95,9 +183,13 @@ const generate = (body, state) => {
 
     const launch = () => {
       clearTimeout(hedgeTimer);
+      while (next < models.length && isCoolingDown(models[next])) {
+        state.failures.push(`${models[next]}: skipped (cooling down after 429/503)`);
+        next++;
+      }
       const remaining = state.deadline - Date.now();
       if (next >= models.length || remaining <= 500) {
-        if (running === 0) finish(reject, lastError || new Error('No time left to call Gemini'));
+        if (running === 0) finish(reject, lastError || new Error('Every Gemini model is cooling down or out of time'));
         return;
       }
       const i = next++;
@@ -120,6 +212,7 @@ const generate = (body, state) => {
           running--;
           lastError = error;
           state.failures.push(`${models[i]}: ${describeError(error)}`);
+          coolDown(models[i], error);
           if (!isRetryable(error) && error.response?.status !== 404) {
             // A bad request or key fails the same way on every model
             if (running === 0) finish(reject, error);
@@ -128,7 +221,8 @@ const generate = (body, state) => {
           if (running === 0 || next < models.length) launch();
         })
         .finally(() => controllers.delete(controller));
-      if (next < models.length) hedgeTimer = setTimeout(launch, HEDGE_AFTER_MS);
+      const hedgeAvailable = models.slice(next).some((m) => !isCoolingDown(m));
+      if (hedgeAvailable) hedgeTimer = setTimeout(launch, HEDGE_AFTER_MS);
     };
 
     launch();
@@ -140,7 +234,14 @@ const generate = (body, state) => {
  * Returns { text, toolCalls, models } where toolCalls lists the tool names used and models the model
  * that served each call, in order.
  */
-export const callGeminiAPI = async (systemPrompt, chatHistory, userMessage, now = new Date(), deadline = Date.now() + ANSWER_DEADLINE_MS) => {
+export const callGeminiAPI = async (
+  systemPrompt,
+  chatHistory,
+  userMessage,
+  now = new Date(),
+  deadline = Date.now() + ANSWER_DEADLINE_MS,
+  maxRounds = MAX_TOOL_ROUNDS
+) => {
   // Read at call time so tests (and a key added to .env before a restart) work without re-importing
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -154,7 +255,7 @@ export const callGeminiAPI = async (systemPrompt, chatHistory, userMessage, now 
   const state = { apiKey, deadline, model: 0, calls: [], failures: [] };
   const toolCalls = [];
   try {
-    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    for (let round = 0; round <= maxRounds; round++) {
       const data = await generate(
         {
           systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -174,7 +275,7 @@ export const callGeminiAPI = async (systemPrompt, chatHistory, userMessage, now 
       const content = data?.candidates?.[0]?.content;
       const calls = (content?.parts || []).filter((p) => p.functionCall).map((p) => p.functionCall);
       if (calls.length === 0) return { text: replyText(content), toolCalls, models: state.calls, failures: state.failures };
-      if (round === MAX_TOOL_ROUNDS) break;
+      if (round === maxRounds) break;
 
       // Keep the model's turn as sent (it may carry signatures Gemini expects back), then answer every call
       contents.push(content);
@@ -190,7 +291,7 @@ export const callGeminiAPI = async (systemPrompt, chatHistory, userMessage, now 
     throw error;
   }
 
-  const error = new Error(`No answer after ${MAX_TOOL_ROUNDS} rounds of tool calls`);
+  const error = new Error(`No answer after ${maxRounds} rounds of tool calls`);
   error.failures = state.failures;
   throw error;
 };
@@ -211,52 +312,73 @@ export const chatbotQuery = async (req, res) => {
     const userId = req.user?.id || 'default_user';
     let history = userChatHistories.get(userId) || [];
 
-    // Look up what the question clearly needs: the model can usually answer in one call, and the
-    // offline answer uses the same data if the model is unavailable
+    // Look up what the question clearly needs. If that answers all of it, no model call is spent;
+    // otherwise the model gets the data with the question and usually answers in one call
     let lookups = [];
+    let covered = false;
     try {
-      lookups = await prefetchForQuestion(message, history, now);
+      ({ lookups, covered } = await analyzeQuestion(message, history, now));
     } catch (lookupError) {
       log('WARN', 'Chatbot lookups failed', { error: lookupError.message });
     }
 
     let response = null;
-    let source = 'gemini';
+    let source;
+    const remember = (text) => {
+      // Conversation memory: the last 3 exchanges, question and answer text only (never looked-up data)
+      history.push({ role: 'user', text: message });
+      history.push({ role: 'model', text });
+      if (history.length > 6) history = history.slice(history.length - 6);
+      userChatHistories.set(userId, history);
+    };
 
-    try {
-      const systemPrompt = buildSystemPrompt(language, now);
-      const result = await callGeminiAPI(systemPrompt, history, message + formatLookupsForModel(lookups), now, started + ANSWER_DEADLINE_MS);
-      response = result.text;
-      log('INFO', 'Chatbot answered by Gemini', {
-        ms: Date.now() - started,
-        models: result.models,
-        prefetched: lookups.map((l) => l.tool),
-        ...(result.toolCalls.length > 0 && { tools: result.toolCalls }),
-        ...(result.failures.length > 0 && { retried: result.failures }),
-      });
+    const directAnswers = process.env.CHATBOT_DIRECT_ANSWERS !== 'false';
+    const key = cacheKey(language, history, message, lookups);
+    const cached = cacheGet(key);
 
-      // Update Conversation Memory (keep only last 3 turns = 6 messages); question and answer text only,
-      // never the looked-up data or tool results
-      if (response) {
-        history.push({ role: 'user', text: message });
-        history.push({ role: 'model', text: response });
-        if (history.length > 6) {
-          history = history.slice(history.length - 6);
-        }
-        userChatHistories.set(userId, history);
+    if (covered && directAnswers) {
+      response = buildFallbackAnswer(lookups, language);
+      source = 'direct';
+    } else if (cached) {
+      response = cached;
+      source = 'cache';
+    } else if (!takeUserBudget(userId)) {
+      log('WARN', 'Chatbot user over the per-minute model budget, answering directly', { userId });
+    } else {
+      try {
+        const systemPrompt = buildSystemPrompt(language, now);
+        const result = await callGeminiAPI(
+          systemPrompt,
+          history,
+          message + formatLookupsForModel(lookups),
+          now,
+          started + ANSWER_DEADLINE_MS,
+          lookups.length > 0 ? MAX_TOOL_ROUNDS_WITH_DATA : MAX_TOOL_ROUNDS
+        );
+        response = result.text;
+        source = 'gemini';
+        log('INFO', 'Chatbot answered by Gemini', {
+          ms: Date.now() - started,
+          models: result.models,
+          prefetched: lookups.map((l) => l.tool),
+          ...(result.toolCalls.length > 0 && { tools: result.toolCalls }),
+          ...(result.failures.length > 0 && { retried: result.failures }),
+        });
+        if (response) cacheSet(key, response);
+      } catch (geminiError) {
+        log('WARN', 'Gemini unavailable, answering from the inventory directly', {
+          error: geminiError.message,
+          ms: Date.now() - started,
+          attempts: geminiError.failures,
+        });
       }
-    } catch (geminiError) {
-      log('WARN', 'Gemini unavailable, answering from the inventory directly', {
-        error: geminiError.message,
-        ms: Date.now() - started,
-        attempts: geminiError.failures,
-      });
     }
 
     if (!response) {
       response = buildFallbackAnswer(lookups, language);
       source = 'fallback';
     }
+    remember(response);
 
     log('INFO', `Chatbot query processed via ${source}`, { message: message.substring(0, 50) });
 

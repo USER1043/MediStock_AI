@@ -60,12 +60,13 @@ const capped = (key, items) => ({
 
 // ── Tools ────────────────────────────────────────────────────────────────
 
-/** Medicines whose name contains `query` (case-insensitive), optionally within one category. */
+/** Medicines whose name contains `query` (case-insensitive), optionally within one category; or every medicine of a category. */
 const searchMedicines = async ({ query, category } = {}, now) => {
   const q = text(query);
-  if (!q) return { error: 'query is required' };
-  const filter = { name: { $regex: escapeRegex(q), $options: 'i' } };
   const cat = text(category);
+  if (!q && !cat) return { error: 'query or category is required' };
+  const filter = {};
+  if (q) filter.name = { $regex: escapeRegex(q), $options: 'i' };
   if (cat) filter.category = { $regex: `^${escapeRegex(cat)}$`, $options: 'i' };
   const medicines = await Medicine.find(filter, FIELDS).sort({ name: 1 }).limit(MAX_RESULTS + 1).lean();
   return { query: q, ...capped('medicines', medicines.map((m) => describeMedicine(m, now))) };
@@ -91,7 +92,9 @@ const listLowStock = async (_args, now) => {
     .filter(isMedicineLowStock)
     .map((m) => describeMedicine(m, now))
     .sort((a, b) => STOCK_LEVEL_RANK[a.stockLevel] - STOCK_LEVEL_RANK[b.stockLevel] || a.totalQuantity - b.totalQuantity)
-    .map(({ name, category, totalQuantity, reorderLevel, stockLevel }) => ({ name, category, totalQuantity, reorderLevel, stockLevel }));
+    .map(({ name, category, totalQuantity, reorderLevel, stockLevel, activeBatches }) => ({
+      name, category, totalQuantity, reorderLevel, stockLevel, rack: activeBatches[0]?.rack || 'N/A',
+    }));
   return capped('lowStock', medicines);
 };
 
@@ -148,14 +151,13 @@ export const TOOLS = {
     run: searchMedicines,
     declaration: {
       name: 'search_medicines',
-      description: 'Find medicines by (part of) their name. Returns stock, price, rack numbers and active batches. Use it for any question about a specific medicine.',
+      description: 'Find medicines by (part of) their name, or list a whole category. Returns stock, price, rack numbers and active batches. Use it for any question about a specific medicine.',
       parameters: {
         type: 'OBJECT',
         properties: {
-          query: { type: 'STRING', description: 'Medicine name or part of it, e.g. "paracetamol"' },
-          category: { type: 'STRING', description: 'Optional: only this category' },
+          query: { type: 'STRING', description: 'Medicine name or part of it, e.g. "paracetamol". Leave out to list a whole category' },
+          category: { type: 'STRING', description: 'Optional: only this category (required when there is no query)' },
         },
-        required: ['query'],
       },
     },
   },
@@ -178,7 +180,7 @@ export const TOOLS = {
     run: listLowStock,
     declaration: {
       name: 'list_low_stock',
-      description: 'Medicines at or below their reorder level (out, critical or low), most urgent first.',
+      description: 'Medicines at or below their reorder level (out, critical or low), most urgent first, with the rack of the batch to use first.',
       parameters: { type: 'OBJECT', properties: {} },
     },
   },

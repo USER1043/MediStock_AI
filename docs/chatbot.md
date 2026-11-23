@@ -1,6 +1,6 @@
 # Voice Assistant (Chatbot)
 
-> **TL;DR** — A floating chat widget (`Chatbot.jsx`) takes typed or spoken questions in **English or Tamil**, sends them to `POST /api/chatbot/query`, and reads the answer aloud. The server first **looks up what the question names** (medicines, including brand names and Tamil spellings; low stock; expiry; sales) and sends that data with the question to **Gemini 3.5 Flash-Lite**, so most questions are answered in **one model call**. The model can still call five read-only **inventory tools** for anything else. A busy or slow model is retried on a second model, and if no answer arrives within **12 s** the server **answers directly from the looked-up data**, with the same stock rules. The last 3 exchanges per user are kept as memory. The API key never leaves the server.
+> **TL;DR** — A floating chat widget (`Chatbot.jsx`) takes typed or spoken questions in **English or Tamil**, sends them to `POST /api/chatbot/query`, and reads the answer aloud. The server first **looks up what the question names** (medicines, including brand names and Tamil spellings; categories like "acidity"; low stock; expiry; sales). When that answers the whole question, it **answers directly with no model call**. Otherwise it sends the data with the question to **Gemini 3.5 Flash-Lite**, which usually answers in **one call** and can still call five read-only **inventory tools**. The free-tier quota is protected by a cache, a cooldown on models that return 429/503, and a per-user limit. A busy or slow model is retried on a second model, and if no answer arrives within **12 s** the server answers from the looked-up data. The last 3 exchanges per user are kept as memory. The API key never leaves the server.
 
 ---
 
@@ -24,7 +24,12 @@ sequenceDiagram
     end
     W->>API: POST /api/chatbot/query {message, language}
     API->>API: load last 6 messages for req.user.id
-    API->>DB: prefetchForQuestion(): the tools the question clearly needs
+    API->>DB: analyzeQuestion(): the tools the question clearly needs
+    alt the lookups answer the whole question
+        API->>API: buildFallbackAnswer() (source: direct, no model call)
+    else same question, same data, within 5 min
+        API->>API: cached answer (source: cache)
+    end
     API->>G: generateContent(system prompt, history, question + looked-up data, tools)
     opt the looked-up data does not cover it (up to 4 rounds)
         G-->>API: functionCall(s), e.g. search_medicines {query}
@@ -37,7 +42,7 @@ sequenceDiagram
     else busy / rate-limited / slow on every model, no key, or still calling tools
         API->>API: buildFallbackAnswer(looked-up data, language)
     end
-    API-->>W: {response, source: gemini | fallback, disclaimer}
+    API-->>W: {response, source: direct | cache | gemini | fallback, disclaimer}
     W->>TTS: speakTamil / speakEnglish(response)
     TTS-->>U: audio
 ```
@@ -65,20 +70,23 @@ sequenceDiagram
 | mentions expiry / காலாவதி (with "N days" if given) | `list_expiring_batches` |
 | mentions summary / sales / விற்பனை | `get_inventory_summary` |
 | names nothing but points back ("and **its** rack?", "அதன் விலை?") | the medicines named in the previous question |
+| names no medicine but a category, by name or an everyday word ("anything for **acidity**?", "pain", "allergy", "இருமல்") | `find_alternatives` for that category: what is in stock (`CATEGORY_HINTS`) |
 
 Tamil names are matched by a **sound skeleton**: vowels dropped, voiced and unvoiced consonants in one class, repeats collapsed. "பாராசிட்டமால்" and "paracetamol" both become `prstml`. Brand names come from a short table (`BRAND_TO_GENERIC`). Only medicine **names** are read to find matches; the full records are fetched only for the matches.
+
+**Direct answers.** If every word of the question was recognised (medicine names, brands, categories, topics, or filler such as "do we have", "rack", "price", "இருக்கா"), the lookups answer all of it and `buildFallbackAnswer` replies with no model call. A question with anything else ("which is **cheaper**…", "**why** is…", "can I give it to a **child**?") goes to the model. Set `CHATBOT_DIRECT_ANSWERS=false` to send every question to the model.
 
 **Tools** (`server/services/chatbotTools.js`). All are read-only, run one small query, and return at most 15 medicines or batches (with `truncated` and `total` when there are more). Stock and expiry follow the app's shared rules (`utils/stockLevel.js`, `utils/expiry.js`): an **active batch** has stock left and hasn't expired (from 00:00 IST on its expiry day).
 
 | Tool | Arguments | Returns |
 |------|-----------|---------|
-| `search_medicines` | `query` (part of the name), optional `category` | Matching medicines: `inStock`, `sellableQuantity`, expired stock still on the shelf, total quantity, reorder level, stock level, price, active batches (batch, rack, quantity, expiry, days left; earliest first) |
+| `search_medicines` | `query` (part of the name) and/or `category` | Matching medicines: `inStock`, `sellableQuantity`, expired stock still on the shelf, total quantity, reorder level, stock level, price, active batches (batch, rack, quantity, expiry, days left; earliest first) |
 | `find_alternatives` | `category`, optional `exclude` (name) | In-stock medicines of that category, most stock first |
-| `list_low_stock` | — | Medicines at or below their reorder level, most urgent first |
+| `list_low_stock` | — | Medicines at or below their reorder level, most urgent first, with the rack to use first |
 | `list_expiring_batches` | optional `days` (1–180, default 30) | Batches with stock that have expired or expire within the window, soonest first, with racks |
 | `get_inventory_summary` | — | Counts (medicines, low stock, medicines with expired stock), categories, today's sales (from 00:00 IST) |
 
-**The loop** (`callGeminiAPI`). The model replies either with text (the answer) or with one or more `functionCall`s. The server runs every call (`runTool`, which never throws: an unknown tool or a failed query comes back as `{ error }`), appends the model's turn and the `functionResponse`s, and asks again. After 4 rounds of tool calls without an answer it gives up and the offline answer is used. Each answer is logged with its time, the models used, what was looked up and any retries.
+**The loop** (`callGeminiAPI`). The model replies either with text (the answer) or with one or more `functionCall`s. The server runs every call (`runTool`, which never throws: an unknown tool or a failed query comes back as `{ error }`), appends the model's turn and the `functionResponse`s, and asks again. After 4 rounds of tool calls without an answer (1 round when data was sent with the question) it gives up and the offline answer is used. Each answer is logged with its time, the models used, what was looked up and any retries.
 
 **Models, retries and time limits.** `GEMINI_MODELS` (default `gemini-3.5-flash-lite,gemini-flash-lite-latest`) are tried in order; different models have separate free-tier quotas.
 
@@ -90,17 +98,27 @@ Tamil names are matched by a **sound skeleton**: vowels dropped, voiced and unvo
 | No answer **12 s** after the question arrived | The offline answer is used |
 | 400 / 401 / 403 (bad request or key) | Not retried: it would fail on every model |
 
+**Request budget.** The free tier limits requests per minute and per day for each model; a call is about 1,000 input tokens, so tokens are not the constraint, requests are.
+
+| Saving | How |
+|---|---|
+| Direct answers | Questions the lookups fully answer never reach the model |
+| Answer cache | The same question (case and trailing `?` ignored) about the same data is answered from memory for 5 minutes, across users. The looked-up data is part of the key, so any stock change means a new answer. The conversation is part of the key only for follow-ups ("and its rack?") |
+| Cooldown | A model that returns 429 is skipped until its `retryDelay` (default 60 s), one that returns 503 for 15 s. If every model is cooling down, the answer comes from the inventory at once, with no request |
+| Fewer rounds | With data attached the model gets 1 extra tool round, not 4 |
+| Per-user limit | One user gets at most 12 model answers a minute; beyond that, direct answers, so one person can't use up the shared quota |
+| Racing a second model | Only when the other model isn't cooling down |
+
 **Generation config:** `temperature 0.3` (factual, low creativity), `maxOutputTokens 600`, `topK 40`, `topP 0.95`.
 
-**Measured (live, 23 Nov 2026, free tier, 11 questions in English and Tamil):**
+**Measured (live, 24 Nov 2026, free tier, 16 questions in English and Tamil):**
 
-| | Before (tools only) | Now |
-|---|---|---|
-| Model calls per question | 2–5 | 1 for 9 of 11 questions |
-| Typical answer time | 7–20 s | 1–3 s |
-| Slowest answer | 63 s (one call) | 12 s (offline answer, still correct) |
-| All 11 questions | 92 s | 44 s |
-| Answer when Gemini was busy | Generic "I can help with…" message, or expired stock shown as available | Correct answer from the looked-up data |
+| | Tools only | + lookups first | + direct answers, cache, cooldown |
+|---|---|---|---|
+| Gemini requests | ~2–5 per question | ~1–2 per question | **5 for all 16** (12 answered directly) |
+| Typical answer time | 7–20 s | 1–3 s | **0.1–0.6 s** direct, 1–3 s with the model |
+| Slowest answer | 63 s (one call) | 12 s (offline answer) | 5 s |
+| When Gemini was busy | Generic message, or expired stock shown as available | Correct answer from the looked-up data | Same, and the busy model is skipped for a while |
 
 ---
 
@@ -116,12 +134,14 @@ Tamil names are matched by a **sound skeleton**: vowels dropped, voiced and unvo
 
 | Layer | Trigger | Behaviour |
 |-------|---------|-----------|
+| Direct answer | The lookups answer the whole question | `buildFallbackAnswer`, no model call (`source: direct`) |
+| Cache | Same question about the same data within 5 minutes | The earlier model answer (`source: cache`) |
 | Second model | The first model is busy, rate-limited, retired or slow | The same request on the next model in `GEMINI_MODELS` (see above) |
-| Offline answer (`buildFallbackAnswer`) | No answer within 12 s on any model, no API key, an empty reply, or still calling tools after 4 rounds | Built from the same looked-up data, in English or Tamil: availability with the batch and rack to use first, expired stock called out as not sellable, same-category alternatives, low-stock and expiry lists, the summary, brand-name notes. If nothing was looked up, a short help message |
+| Offline answer (`buildFallbackAnswer`) | No answer within 12 s on any model, every model cooling down, the user over 12 questions a minute, no API key, an empty reply, or still calling tools after the round limit | Built from the same looked-up data, in English or Tamil: availability with the batch and rack to use first, expired stock called out as not sellable, same-category alternatives, low-stock and expiry lists, the summary, brand-name notes. If nothing was looked up, a short help message |
 | Client fallback | The backend request fails entirely | `getSmartResponse` can use a predefined keyword→answer map; the widget passes `null`, so it shows an error message instead |
 | TTS fallback | No Tamil system voice | `tamilTTS.js` converts Tamil script to an English phonetic approximation and speaks it with an available voice |
 
-The response always includes `source` (`gemini` or `fallback`) so the UI (and debugging) can tell which path answered.
+The response always includes `source` (`direct`, `cache`, `gemini` or `fallback`) so the UI (and debugging) can tell which path answered.
 
 ---
 
@@ -145,7 +165,9 @@ The response always includes `source` (`gemini` or `fallback`) so the UI (and de
 
 ## Known limitations
 
-- **The free tier is busy.** During testing about 1 in 5 calls returned 503 or 429. The second model and the offline answer cover this, but the offline answer is templated, not conversational.
+- **The free tier is busy.** During testing about 1 in 5 calls returned 503 or 429. The second model and the offline answer cover this.
+- **Direct answers are templated**, not conversational: accurate and instant, but the same wording each time. `CHATBOT_DIRECT_ANSWERS=false` trades requests for phrasing.
+- **The cache, cooldowns and per-user counters are in-process**, like the chat history: per server instance, reset on restart.
 - **Name matching is heuristic.** A medicine that is only described ("something for allergies") or a brand missing from `BRAND_TO_GENERIC` goes to the model's tools, which takes more round trips.
 - **Tool results are capped at 15 items**, so a broad question ("everything expiring this year") gets the first 15 and a `truncated` flag.
 - **In-memory history** is lost on restart, isn't shared across instances, and grows with the number of distinct users (no eviction).

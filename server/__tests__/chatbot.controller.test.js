@@ -1,7 +1,8 @@
 /**
- * POST /api/chatbot/query with Gemini mocked (axios.post). The server looks up what the question names
- * and sends that with it, the model can call the inventory tools for anything else, busy or slow models
- * are retried on the next one, and the offline answer is used when Gemini can't answer in time.
+ * POST /api/chatbot/query with Gemini mocked (axios.post). Questions the server's lookups fully answer
+ * get a direct answer with no model call; others go to Gemini with the looked-up data. Free-tier
+ * requests are saved by caching, cooling down a model after 429/503 and a per-user budget; busy or slow
+ * models are retried on the next one; and the offline answer is used when Gemini can't answer in time.
  * Uses only the route handler, on an in-memory MongoDB.
  */
 import { jest } from '@jest/globals';
@@ -15,8 +16,12 @@ jest.unstable_mockModule('../utils/logger.js', () => ({ default: jest.fn() }));
 process.env.GEMINI_API_KEY = 'test-key';
 delete process.env.GEMINI_API_URL;
 delete process.env.GEMINI_MODELS;
+delete process.env.CHATBOT_DIRECT_ANSWERS;
 
-const { chatbotQuery, MAX_TOOL_ROUNDS, DEFAULT_GEMINI_MODELS, HEDGE_AFTER_MS } = await import('../controllers/chatbotController.js');
+const {
+  chatbotQuery, resetChatbotState, MAX_TOOL_ROUNDS, MAX_TOOL_ROUNDS_WITH_DATA, DEFAULT_GEMINI_MODELS, HEDGE_AFTER_MS,
+  USER_MODEL_QUESTIONS_PER_MINUTE,
+} = await import('../controllers/chatbotController.js');
 const { Medicine } = await import('../models/medicineModel.js');
 
 let server;
@@ -29,13 +34,16 @@ const ask = async (message, userId = `user-${++userSeq}`, language = 'en') => {
   return out;
 };
 
+// Needs the model: names medicines, but "compare" is not something the lookups answer
+const MODEL_QUESTION = 'compare zincovit and montelukast';
+
 // One Gemini reply: a text answer, or function calls
 const textReply = (text) => ({ data: { candidates: [{ content: { role: 'model', parts: [{ text }] } }] } });
 const callReply = (...calls) => ({
   data: { candidates: [{ content: { role: 'model', parts: calls.map(([name, args]) => ({ functionCall: { name, args } })) } }] },
 });
-const httpError = (status, message = 'error') => Object.assign(new Error(`Request failed with status code ${status}`), {
-  response: { status, data: { error: { message } } },
+const httpError = (status, message = 'error', details = []) => Object.assign(new Error(`Request failed with status code ${status}`), {
+  response: { status, data: { error: { message, details } } },
 });
 const requestBody = (i) => post.mock.calls[i][1];
 const modelOf = (i) => post.mock.calls[i][0].match(/models\/([^:]+):/)[1];
@@ -57,15 +65,42 @@ afterAll(async () => {
   await server.stop();
 });
 
-beforeEach(() => post.mockReset());
+beforeEach(() => {
+  post.mockReset();
+  resetChatbotState();
+});
 
-test('a named medicine is looked up first, so the model answers in one call', async () => {
-  post.mockResolvedValueOnce(textReply('Paracetamol 500mg is in stock: 40 units on rack A7.'));
+describe('questions the lookups fully answer cost no model call', () => {
+  test.each([
+    ['Do we have paracetamol?', /Paracetamol 500mg: in stock, 40 units at ₹5\. Use batch A7-1 first \(rack A7/],
+    ['where is montelukast', /Montelukast 10mg: in stock.*rack M3/],
+    ['low stock?', /All medicines are above their reorder level/],
+    ['anything expiring soon?', /No stock expires within 30 days/],
+  ])('%s', async (question, answer) => {
+    const out = await ask(question);
+    expect(post).not.toHaveBeenCalled();
+    expect(out.body).toMatchObject({ success: true, source: 'direct' });
+    expect(out.body.response).toMatch(answer);
+  });
 
-  const out = await ask('Do we have paracetamol?');
+  test('CHATBOT_DIRECT_ANSWERS=false sends them to the model instead', async () => {
+    process.env.CHATBOT_DIRECT_ANSWERS = 'false';
+    post.mockResolvedValueOnce(textReply('Yes, 40 units on rack A7.'));
+
+    const out = await ask('Do we have paracetamol?');
+
+    expect(out.body).toMatchObject({ source: 'gemini', response: 'Yes, 40 units on rack A7.' });
+    delete process.env.CHATBOT_DIRECT_ANSWERS;
+  });
+});
+
+test('other questions go to the model in one call, with only the matching medicines attached', async () => {
+  post.mockResolvedValueOnce(textReply('Zincovit is ₹9, Montelukast ₹12.'));
+
+  const out = await ask(MODEL_QUESTION);
 
   expect(out.status).toBe(200);
-  expect(out.body).toMatchObject({ success: true, source: 'gemini', response: 'Paracetamol 500mg is in stock: 40 units on rack A7.' });
+  expect(out.body).toMatchObject({ success: true, source: 'gemini', response: 'Zincovit is ₹9, Montelukast ₹12.' });
   expect(post).toHaveBeenCalledTimes(1);
 
   const [url, body, config] = post.mock.calls[0];
@@ -76,11 +111,11 @@ test('a named medicine is looked up first, so the model answers in one call', as
   expect(body.systemInstruction.parts[0].text).toMatch(/Plain text only/);
   expect(body.tools[0].functionDeclarations.map((t) => t.name)).toContain('search_medicines');
 
-  // The question carries only the matching medicine, never the whole inventory
   const text = userText(0);
-  expect(text).toMatch(/^Do we have paracetamol\?\n\n\[Inventory data the server already looked up/);
-  expect(text).toContain('"rack":"A7"');
-  for (const other of ['Zincovit', 'Montelukast']) expect(JSON.stringify(body)).not.toContain(other);
+  expect(text).toMatch(/^compare zincovit and montelukast\n\n\[Inventory data the server already looked up/);
+  expect(text).toContain('"rack":"S2"');
+  expect(text).toContain('"rack":"M3"');
+  expect(JSON.stringify(body)).not.toContain('Paracetamol');
 });
 
 test('without a recognisable name the model looks things up with tools', async () => {
@@ -110,92 +145,171 @@ test('several calls in one turn are all answered, in order', async () => {
   expect(parts[1].functionResponse.response.totalMedicines).toBe(3);
 });
 
-test('a busy model (503) is retried on the next model', async () => {
-  post
-    .mockRejectedValueOnce(httpError(503, 'high demand'))
-    .mockResolvedValueOnce(textReply('Zincovit Tablet: 25 units, rack S2.'));
+describe('saving free-tier requests', () => {
+  test('the same question about the same data is answered from the cache', async () => {
+    post.mockResolvedValueOnce(textReply('Zincovit is cheaper.'));
 
-  const out = await ask('stock of zincovit');
+    const first = await ask(MODEL_QUESTION, 'cache-a');
+    const second = await ask(MODEL_QUESTION, 'cache-b');
 
-  expect(out.body).toMatchObject({ source: 'gemini', response: 'Zincovit Tablet: 25 units, rack S2.' });
-  expect([modelOf(0), modelOf(1)]).toEqual(DEFAULT_GEMINI_MODELS);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(first.body.source).toBe('gemini');
+    expect(second.body).toMatchObject({ source: 'cache', response: 'Zincovit is cheaper.' });
+  });
+
+  test('the same user asking again later in the conversation also hits the cache', async () => {
+    post.mockResolvedValueOnce(textReply('Zincovit is cheaper.'));
+
+    await ask(MODEL_QUESTION, 'cache-e');
+    await ask('Do we have paracetamol?', 'cache-e'); // changes the conversation
+    const again = await ask(`${MODEL_QUESTION}?`, 'cache-e');
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(again.body.source).toBe('cache');
+  });
+
+  test('a cached answer is not reused once the data changes', async () => {
+    post.mockResolvedValueOnce(textReply('first')).mockResolvedValueOnce(textReply('second'));
+
+    await ask(MODEL_QUESTION, 'cache-c');
+    await Medicine.updateOne({ name: 'Zincovit Tablet' }, { sellingPrice: 10 });
+    const out = await ask(MODEL_QUESTION, 'cache-d');
+    await Medicine.updateOne({ name: 'Zincovit Tablet' }, { sellingPrice: 9 });
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(out.body.response).toBe('second');
+  });
+
+  test('a model that answered 429 is skipped until its retry delay has passed', async () => {
+    post
+      .mockRejectedValueOnce(httpError(429, 'quota', [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '37s' }]))
+      .mockResolvedValueOnce(textReply('one'))
+      .mockResolvedValueOnce(textReply('two'));
+
+    await ask(MODEL_QUESTION);
+    await ask('compare paracetamol and montelukast');
+
+    expect([modelOf(0), modelOf(1), modelOf(2)]).toEqual([DEFAULT_GEMINI_MODELS[0], DEFAULT_GEMINI_MODELS[1], DEFAULT_GEMINI_MODELS[1]]);
+  });
+
+  test('when every model is cooling down the answer comes straight from the inventory', async () => {
+    post.mockRejectedValue(httpError(429, 'quota'));
+
+    await ask(MODEL_QUESTION); // both models answer 429
+    post.mockClear();
+    const out = await ask('compare paracetamol and montelukast');
+
+    expect(post).not.toHaveBeenCalled();
+    expect(out.body.source).toBe('fallback');
+    expect(out.body.response).toMatch(/Paracetamol 500mg: in stock/);
+  });
+
+  test(`one user gets at most ${USER_MODEL_QUESTIONS_PER_MINUTE} model answers a minute`, async () => {
+    post.mockImplementation(async () => textReply('ok'));
+
+    for (let i = 0; i < USER_MODEL_QUESTIONS_PER_MINUTE; i++) await ask(`compare zincovit and montelukast ${i}`, 'busy-user');
+    const over = await ask('compare zincovit and montelukast again', 'busy-user');
+
+    expect(post).toHaveBeenCalledTimes(USER_MODEL_QUESTIONS_PER_MINUTE);
+    expect(over.body.source).toBe('fallback');
+    expect(over.body.response).toMatch(/Zincovit Tablet: in stock/);
+  });
+
+  test(`with data attached the model gets ${MAX_TOOL_ROUNDS_WITH_DATA} extra tool round, then the offline answer`, async () => {
+    post.mockResolvedValue(callReply(['list_low_stock', {}]));
+
+    const out = await ask(MODEL_QUESTION);
+
+    expect(post).toHaveBeenCalledTimes(MAX_TOOL_ROUNDS_WITH_DATA + 1);
+    expect(out.body.source).toBe('fallback');
+  });
+
+  test('without data a model that keeps calling tools is cut off after the full limit', async () => {
+    post.mockResolvedValue(callReply(['list_low_stock', {}]));
+
+    const out = await ask('how is everything');
+
+    expect(post).toHaveBeenCalledTimes(MAX_TOOL_ROUNDS + 1);
+    expect(out.body.source).toBe('fallback');
+  });
 });
 
-test('a bad request (400) is not retried on another model', async () => {
-  post.mockRejectedValue(httpError(400, 'invalid argument'));
+describe('busy, slow and failing models', () => {
+  test('a busy model (503) is retried on the next model', async () => {
+    post
+      .mockRejectedValueOnce(httpError(503, 'high demand'))
+      .mockResolvedValueOnce(textReply('Zincovit ₹9, Montelukast ₹12.'));
 
-  const out = await ask('stock of zincovit');
+    const out = await ask(MODEL_QUESTION);
 
-  expect(post).toHaveBeenCalledTimes(1);
-  expect(out.body.source).toBe('fallback');
-});
+    expect(out.body).toMatchObject({ source: 'gemini', response: 'Zincovit ₹9, Montelukast ₹12.' });
+    expect([modelOf(0), modelOf(1)]).toEqual(DEFAULT_GEMINI_MODELS);
+  });
 
-test('a slow model is raced against the next one and the first answer wins', async () => {
-  let aborted = false;
-  post
-    .mockImplementationOnce((_url, _body, { signal }) => new Promise((_resolve, reject) => {
-      signal.addEventListener('abort', () => { aborted = true; reject(new Error('canceled')); });
-    }))
-    .mockResolvedValueOnce(textReply('Montelukast 10mg is on rack M3.'));
+  test('a bad request (400) is not retried on another model', async () => {
+    post.mockRejectedValue(httpError(400, 'invalid argument'));
 
-  const started = Date.now();
-  const out = await ask('where is montelukast');
+    const out = await ask(MODEL_QUESTION);
 
-  expect(out.body).toMatchObject({ source: 'gemini', response: 'Montelukast 10mg is on rack M3.' });
-  expect(Date.now() - started).toBeGreaterThanOrEqual(HEDGE_AFTER_MS - 50);
-  expect(modelOf(1)).toBe(DEFAULT_GEMINI_MODELS[1]);
-  expect(aborted).toBe(true); // the slow request is cancelled
-}, 15000);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(out.body.source).toBe('fallback');
+  });
 
-test('GEMINI_MODELS sets the models to try', async () => {
-  process.env.GEMINI_MODELS = 'model-a, model-b';
-  post.mockRejectedValueOnce(httpError(429, 'quota')).mockResolvedValueOnce(textReply('ok'));
+  test('a slow model is raced against the next one and the first answer wins', async () => {
+    let aborted = false;
+    post
+      .mockImplementationOnce((_url, _body, { signal }) => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => { aborted = true; reject(new Error('canceled')); });
+      }))
+      .mockResolvedValueOnce(textReply('Montelukast 10mg is on rack M3.'));
 
-  await ask('stock of zincovit');
+    const started = Date.now();
+    const out = await ask(MODEL_QUESTION);
 
-  expect([modelOf(0), modelOf(1)]).toEqual(['model-a', 'model-b']);
-  delete process.env.GEMINI_MODELS;
-});
+    expect(out.body).toMatchObject({ source: 'gemini', response: 'Montelukast 10mg is on rack M3.' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(HEDGE_AFTER_MS - 50);
+    expect(modelOf(1)).toBe(DEFAULT_GEMINI_MODELS[1]);
+    expect(aborted).toBe(true); // the slow request is cancelled
+  }, 15000);
 
-test('a model that keeps calling tools is cut off and the offline answer is used', async () => {
-  post.mockResolvedValue(callReply(['list_low_stock', {}]));
+  test('GEMINI_MODELS sets the models to try', async () => {
+    process.env.GEMINI_MODELS = 'model-a, model-b';
+    post.mockRejectedValueOnce(httpError(500, 'internal')).mockResolvedValueOnce(textReply('ok'));
 
-  const out = await ask('low stock?');
+    await ask(MODEL_QUESTION);
 
-  expect(post).toHaveBeenCalledTimes(MAX_TOOL_ROUNDS + 1);
-  expect(out.body.source).toBe('fallback');
-  expect(out.body.response).toMatch(/All medicines are above their reorder level/);
-});
+    expect([modelOf(0), modelOf(1)]).toEqual(['model-a', 'model-b']);
+    delete process.env.GEMINI_MODELS;
+  });
 
-test('when Gemini fails, the offline answer uses the looked-up data', async () => {
-  post.mockRejectedValue(new Error('offline'));
+  test('when Gemini fails, the offline answer uses the looked-up data', async () => {
+    post.mockRejectedValue(new Error('offline'));
 
-  const out = await ask('stock of zincovit');
+    const out = await ask(MODEL_QUESTION);
 
-  expect(out.body.source).toBe('fallback');
-  expect(out.body.response).toBe('Zincovit Tablet: in stock, 25 units at ₹9. Use batch S2-1 first (rack S2, expires 2030-01-01).');
-});
+    expect(out.body.source).toBe('fallback');
+    expect(out.body.response).toMatch(/Zincovit Tablet: in stock, 25 units at ₹9\. Use batch S2-1 first \(rack S2/);
+    expect(out.body.response).toMatch(/Montelukast 10mg: in stock/);
+  });
 
-test('the offline answer follows the language', async () => {
-  post.mockRejectedValue(new Error('offline'));
+  test('the offline answer follows the language', async () => {
+    post.mockRejectedValue(new Error('offline'));
 
-  const out = await ask('ஜிங்கோவிட் இருக்கா?', undefined, 'ta');
+    const out = await ask('ஜிங்கோவிட் ஒப்பிடு', undefined, 'ta');
 
-  expect(out.body.response).toMatch(/இருப்பில் உள்ளது|உதவ முடியும்/);
+    expect(out.body.response).toMatch(/இருப்பில் உள்ளது|உதவ முடியும்/);
+  });
 });
 
 test('memory keeps only the question and answer text, never the looked-up data', async () => {
-  post
-    .mockResolvedValueOnce(textReply('Montelukast is on rack M3.'))
-    .mockResolvedValueOnce(textReply('You are welcome.'));
+  post.mockResolvedValueOnce(textReply('It is an antiasthmatic.'));
 
-  await ask('Where is montelukast?', 'memory-user');
-  await ask('Thanks', 'memory-user');
+  await ask('Where is montelukast?', 'memory-user'); // answered directly
+  await ask('compare it with zincovit', 'memory-user');
 
-  const contents = requestBody(1).contents;
-  expect(contents.slice(0, 2)).toEqual([
-    { role: 'user', parts: [{ text: 'Where is montelukast?' }] },
-    { role: 'model', parts: [{ text: 'Montelukast is on rack M3.' }] },
-  ]);
-  expect(contents[2].parts[0].text).toMatch(/^Thanks/);
+  const contents = requestBody(0).contents;
+  expect(contents[0]).toEqual({ role: 'user', parts: [{ text: 'Where is montelukast?' }] });
+  expect(contents[1].role).toBe('model');
+  expect(contents[1].parts[0].text).toMatch(/^Montelukast 10mg: in stock/);
+  expect(contents[2].parts[0].text).toMatch(/^compare it with zincovit/);
 });

@@ -68,7 +68,10 @@ describe('search_medicines', () => {
   });
 
   test('a missing query is an error result, not an exception', async () => {
-    expect(await runTool('search_medicines', {}, NOW)).toEqual({ error: 'query is required' });
+    expect(await runTool('search_medicines', {}, NOW)).toEqual({ error: 'query or category is required' });
+    const byCategory = await runTool('search_medicines', { category: 'analgesic' }, NOW);
+    expect(byCategory.medicines.length).toBeGreaterThan(0);
+    expect(byCategory.medicines.every((m) => m.category === 'Analgesic')).toBe(true);
   });
 });
 
@@ -83,7 +86,7 @@ test('find_alternatives: in-stock medicines of the category, most stock first, e
 test('list_low_stock: at or below the reorder level, most urgent first', async () => {
   const res = await runTool('list_low_stock', {}, NOW);
   expect(res.lowStock).toEqual([
-    { name: 'Ibuprofen 400mg', category: 'Analgesic', totalQuantity: 5, reorderLevel: 20, stockLevel: 'critical' },
+    { name: 'Ibuprofen 400mg', category: 'Analgesic', totalQuantity: 5, reorderLevel: 20, stockLevel: 'critical', rack: 'B1' },
   ]);
 });
 
