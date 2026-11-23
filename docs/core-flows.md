@@ -244,13 +244,13 @@ There is no scheduler. Alerts are regenerated **lazily, when they are read**:
 | Type | Scope | Condition | Severity | Fingerprint |
 |------|-------|-----------|----------|-------------|
 | `low_stock` | medicine | `quantity ≤ reorderLevel` (stock level `out`, `critical` or `low`, see [Stock levels](README.md#glossary)) | critical for `out` / `critical`, warning for `low` | the level: `['out']`, `['critical']` or `['low']` |
-| `near_expiry` | batch | the batch has stock left and expires within 7 days | warning | `[expiry day]`, e.g. `['2026-11-23']` |
-| `expired` | batch | the batch has stock left and is past its expiry date | critical | `[expiry day]` |
+| `near_expiry` | batch | the batch has stock left and expires in 1–7 days | warning | `[expiry day]`, e.g. `['2026-11-23']` |
+| `expired` | batch | the batch has stock left and it is the expiry day or later (from 00:00 IST) | critical | `[expiry day]` |
 | `overstock` | medicine | `quantity > 3 × reorderLevel` | info | `['overstock']` |
 
 Low-stock messages: `Out of stock — reorder now (reorder level 50)`, `Critically low: 20 left (reorder level 50)`, `Low stock: 40 left (reorder level 50)`.
 
-Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batches with no stock left are ignored. A batch is identified by its subdocument `_id` in `Medicine.batches` (`Alert.batchId`), which stays the same across in-place batch edits (`PUT /api/inventory/:id`) and top-ups of the same batch (`addStockToBatches`). Each batch alert keeps a `batch` snapshot (number, expiry, rack, quantity) for display, and its message names the batch:
+Expiry is checked per batch (`getExpiringBatches` in `utils/helpers.js`); batches with no stock left are ignored. Days are counted in one place, `utils/expiry.js` (the frontend's `src/utils/expiry.js` is an identical copy): an expiry date is a calendar day (the stored date's UTC day; dates from the UI and Excel are stored at 00:00 UTC), "today" is the shop's day in IST (UTC+05:30), and days left = expiry day − today. A batch is **expired from 00:00 IST on its expiry day** (days left ≤ 0) and near expiry when 1–7 days are left. The same rule drives the inventory filters, reports, chatbot, the Alerts and Inventory pages, and the Excel import check, which flags a row whose batch expires today or earlier as already expired. A batch is identified by its subdocument `_id` in `Medicine.batches` (`Alert.batchId`), which stays the same across in-place batch edits (`PUT /api/inventory/:id`) and top-ups of the same batch (`addStockToBatches`). Each batch alert keeps a `batch` snapshot (number, expiry, rack, quantity) for display, and its message names the batch:
 
 - `Batch AZI-NE1 expires on 23 Nov 2026 (rack E3, qty 10)`
 - `Batch PAR-001 expired on 04 Nov 2026 and is still in stock (rack A2, qty 200)`

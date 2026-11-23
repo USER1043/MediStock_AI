@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import { daysUntilExpiry, isExpired, isNearExpiry } from './expiry.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -22,12 +23,10 @@ export const generateToken = (user) => {
 // Unlike req.path, which is relative to the router that handled it.
 export const requestPath = (req) => (req.originalUrl || req.url || '').split('?')[0];
 
-// Get days until expiry (`now` can be passed in so callers and tests share one clock)
-export const getDaysUntilExpiry = (expiryDate, now = new Date()) => {
-  const expiry = new Date(expiryDate);
-  const diffTime = expiry - new Date(now);
-  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-};
+// Expiry rules (days left, expired, near expiry) live in utils/expiry.js: a batch expires at
+// 00:00 IST on its expiry day. `now` can be passed in so callers and tests share one clock.
+export { isExpired, isNearExpiry };
+export const getDaysUntilExpiry = daysUntilExpiry;
 
 // Stock status ('out' | 'critical' | 'low' | 'ok'), stored as Medicine.stockStatus.
 // The definition lives in utils/stockLevel.js; this name is kept for existing callers.
@@ -62,17 +61,6 @@ export const addStockToBatches = (batches, { batchNumber, expiryDate, quantity, 
 // FEFO sorting - sort by expiry date (ascending)
 export const sortByFEFO = (medicines) => {
   return medicines.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
-};
-
-// Check if medicine is near expiry (within 7 days)
-export const isNearExpiry = (expiryDate, days = 7, now = new Date()) => {
-  const daysLeft = getDaysUntilExpiry(expiryDate, now);
-  return daysLeft <= days && daysLeft > 0;
-};
-
-// Check if medicine is expired
-export const isExpired = (expiryDate, now = new Date()) => {
-  return getDaysUntilExpiry(expiryDate, now) <= 0;
 };
 
 // Split a medicine's in-stock batches into near-expiry and expired groups.
@@ -118,11 +106,11 @@ export const detectAnomalies = (data) => {
       });
     }
 
-    if (new Date(row.expiryDate) < new Date()) {
+    if (isExpired(row.expiryDate)) {
       anomalies.push({
         row: excelRowNumber(row, index),
         field: 'expiryDate',
-        issue: 'Expiry date in the past',
+        issue: 'Already expired (expiry date is today or in the past, IST)',
       });
     }
 
