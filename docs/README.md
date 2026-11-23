@@ -56,7 +56,7 @@ MediStock_AI/
 │   ├── ml/                 # Demand forecasting (LSTM via TensorFlow.js)
 │   ├── utils/              # logger, notifications, PDF generation, helpers
 │   ├── seedFiles/          # Seed scripts for local data
-│   ├── __tests__/, tests/  # Jest tests
+│   ├── __tests__/          # Jest tests
 │   └── misc/               # One-off maintenance scripts
 ├── docs/                   # You are here
 ├── docker-compose.yml      # Local MongoDB

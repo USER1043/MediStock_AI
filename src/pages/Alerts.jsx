@@ -9,6 +9,7 @@
  */
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { alertAPI, notifyAlertsChanged } from '../utils/api';
+import { daysUntilExpiry } from '../utils/expiry';
 import {
   FaBell,
   FaSyncAlt,
@@ -35,8 +36,8 @@ const SEVERITY_META = {
   info: { label: 'Info', border: 'border-blue-400', badge: 'bg-blue-100 text-blue-700', icon: 'bg-blue-50 text-blue-600' },
 };
 
-// Same day count as the server: ceil((expiry - now) / 1 day); 0 or less means expired
-const daysLeft = (iso) => Math.ceil((new Date(iso).getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+// Same day count as the server (utils/expiry.js): expiry day minus today in IST; 0 or less means expired
+const daysLeft = (iso) => daysUntilExpiry(iso);
 
 const batchStatus = (alertType, expiryDate) => {
   const days = daysLeft(expiryDate);

@@ -7,6 +7,5 @@ logs
 uploads
 coverage
 __tests__
-tests
 Dockerfile
 .dockerignore

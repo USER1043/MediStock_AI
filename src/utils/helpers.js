@@ -3,17 +3,12 @@
  * @module utils/helpers
  */
 import { getStockLevel, isLowStock, STOCK_LEVEL_META } from './stockLevel';
+import { daysUntilExpiry } from './expiry';
 
 /**
- * Calculate days until expiry
+ * Days until expiry, counted as the server does (utils/expiry.js): expiry day minus today in IST.
  */
-export const getDaysUntilExpiry = (expiryDate) => {
-  const today = new Date();
-  const expiry = new Date(expiryDate);
-  const diffTime = expiry - today;
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays;
-};
+export const getDaysUntilExpiry = (expiryDate) => daysUntilExpiry(expiryDate);
 
 /**
  * Get expiry status with color coding
@@ -21,7 +16,8 @@ export const getDaysUntilExpiry = (expiryDate) => {
 export const getExpiryStatus = (expiryDate) => {
   const days = getDaysUntilExpiry(expiryDate);
 
-  if (days < 0) {
+  // Expired from 00:00 IST on the expiry day (days === 0), as on the server
+  if (days <= 0) {
     return { status: 'expired', color: 'red', label: 'Expired', days };
   } else if (days <= 30) {
     return { status: 'critical', color: 'red', label: 'Expires Soon', days };

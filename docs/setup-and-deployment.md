@@ -166,40 +166,36 @@ Never point the seed scripts at production: `seedAll` wipes collections.
 
 ```bash
 cd server
-npm test        # node --experimental-vm-modules jest (ESM)
+npm test        # node --experimental-vm-modules jest (ESM); the whole suite, about 20 s
 ```
 
-| Suite | Type | Needs MongoDB? | Covers |
-|-------|------|:--------------:|--------|
-| `__tests__/billing.math.test.js` | Unit | No | Price, discount, tax and change arithmetic |
-| `__tests__/billing.helpers.test.js` | Unit | No | Formatting, validation and invoice-number helpers |
-| `__tests__/billing.controller.test.js` | Unit-style | No | Billing rules: stock checks, deduction, payment methods |
-| `__tests__/billing.integration.test.js` | Integration | No (in-memory) | `createBill`, `adjustQuantity` and `createMedicine` against `mongodb-memory-server`, on both a standalone server and a replica set: FEFO deduction, rollback, concurrent requests, matching added stock by batch number and expiry. The first run downloads a `mongod` binary |
-| `tests/accuracy.test.js` | Model | No | LSTM on synthetic trend and seasonal data (30 s timeout) |
-| `__tests__/alerts.expiry.test.js` | Unit (models mocked) | No | Batch-level near-expiry / expired detection and alert generation |
-| `tests/upload.test.js` | Integration (Supertest) | **Yes** | `POST /api/uploads/excel` end to end against `server.js` |
-| `tests/billing.concurrency.test.js` | Load / concurrency | **Yes** (in-memory, see below) | Concurrent bills and stock adjustments on a replica set (transactions) and a standalone server (compensating rollback): no overselling, `quantity` equals the batch total, every sold unit has one bill and one history row, FEFO order, clean rollback |
+All backend tests live in `server/__tests__/` (`jest.config.js` matches only that folder). None of them uses `MONGODB_URI`: integration tests start their own MongoDB with `mongodb-memory-server` (a standalone server or a single-node replica set), so running them can never touch a real database. The first run downloads a `mongod` binary from `fastdl.mongodb.org` (or set `MONGOMS_SYSTEM_BINARY` to a local one). `__tests__/helpers/` holds a script one test runs in a child process; it is not a test.
 
-Coverage is collected from `controllers/` and `utils/` (`jest.config.js`).
+| Area | Suites |
+|------|--------|
+| Auth and users | `auth.security`, `user.auth`, `passwordPolicy` |
+| Billing and stock | `billing.integration`, `billing.concurrency` (load), `billing.rollback`, `orderNumbers`, `stockLevel`, `stockLevel.integration`, `returnDocument.integration` |
+| Alerts and expiry | `alerts.expiry`, `alerts.integration`, `alerts.lifecycle` |
+| Activity log | `audit.coverage`, `audit.integration`, `audit.redaction` |
+| Forecasting and reorders | `forecast.drafts.integration`, `forecast.permissions`, `forecast.recommendations.permissions`, `forecast.recommendation.update`, `reorder.suggestions`, `accuracy` (LSTM on synthetic data) |
+| Excel import, suppliers, customers | `upload.integration`, `excelImportSupplier.integration`, `medicineSupplier.integration`, `supplierRef`, `customers.api` |
+| Seeds | `seed.timestamps` |
 
-Without a database, the five suites that don't need MongoDB pass (142 tests). `upload.test.js` fails because importing `server.js` runs `connectDB()` at the top level. Set `MONGODB_URI` (and `FRONTEND_URL`) before running the full suite.
+Files that keep a copy of a server file in the frontend (`stockLevel.js`, `passwordPolicy.js`) are checked against it in the matching suite.
 
-**Gaps worth knowing:**
+**CI.** `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`: `npm test` in `server/` (no secrets needed; `npm ci` downloads the `mongod` binary) and `npm run build` at the root.
 
-- The three `__tests__/billing.*` suites define their logic **inside the test files** and don't import the production controller or helpers. They document the intended rules but won't catch regressions in `billingController.js`.
-- There are no tests for auth, RBAC guards, 2FA, forecasting (`computeForecast`), purchase orders or the chatbot.
-- There's no frontend test setup.
-- No CI workflow runs tests. The only workflow is release-please.
-
-Good next tests: Supertest cases for `protect`/`authorize` on each router, and the 2FA login path.
-
-**Concurrency tests.** `billing.concurrency.test.js` starts a real MongoDB with `mongodb-memory-server-core`, which downloads the `mongod` binary from `fastdl.mongodb.org` on first run (or uses `MONGOMS_SYSTEM_BINARY` if set). `CONCURRENCY_LOAD` sets the number of concurrent requests per scenario (default 40). Each run logs how many requests got `201`, `409` and so on.
+**Load test.** `billing.concurrency.test.js` sends `CONCURRENCY_LOAD` concurrent requests per scenario (default 40) and logs how many got `201`, `409` and so on:
 
 ```bash
 cd server
-node --experimental-vm-modules node_modules/jest/bin/jest.js tests/billing.concurrency.test.js
-CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.js tests/billing.concurrency.test.js
+CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.js __tests__/billing.concurrency.test.js
 ```
+
+**Gaps worth knowing:**
+
+- There's no frontend test setup. Frontend behaviour is checked by hand or with a headless browser.
+- `computeForecast` is covered through the forecast-run tests (cold-start path) and the LSTM accuracy test, not on its own.
 
 ---
 
@@ -233,18 +229,18 @@ CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.j
 ## Known limitations
 
 - The first-owner bootstrap is manual.
-- No CI for tests, lint or build on pull requests.
+- CI runs tests and the frontend build, but there is no lint step.
 - Local-disk state (`uploads/`, `logs/`) doesn't suit horizontally scaled or ephemeral hosts.
 - The root `README.md` clone URL points to `kanishmanickam/Fullstack_Pharma_project`, and its env section omits `FRONTEND_URL`.
 
 ## Future improvements
 
 - A `seed:admin` script (or an env-driven bootstrap) that creates the first owner.
-- A CI workflow on pull requests: install, `npm test`, `vite build`, and lint.
+- A lint step (ESLint) in CI.
 - Object storage (S3/GCS) for generated PDFs; stdout-only logging, collected by the platform.
 
 ---
 
 ## Related files
 
-`server/.env.example` · `docker-compose.yml` · `vercel.json` · `public/_redirects` · `server/package.json` · `server/jest.config.js` · `server/seedFiles/` · `.github/workflows/release-please.yml` · `release-please-config.json`
+`server/.env.example` · `.env.example` · `docker-compose.yml` · `Dockerfile` · `server/Dockerfile` · `docker/nginx.conf` · `vercel.json` · `public/_redirects` · `server/package.json` · `server/jest.config.js` · `server/seedFiles/` · `.github/workflows/ci.yml` · `.github/workflows/release-please.yml` · `release-please-config.json`
