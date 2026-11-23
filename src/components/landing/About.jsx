@@ -14,6 +14,14 @@ import {
   Github,
   Linkedin,
   UserRound,
+  Rocket,
+  Mic,
+  Truck,
+  BrainCircuit,
+  SlidersHorizontal,
+  Zap,
+  FlaskConical,
+  HeartPulse,
 } from 'lucide-react';
 
 // --- MODULAR CONFIGURATION (Swap details here) ---
@@ -30,9 +38,14 @@ const LEAD = {
   name: "Prajan Karthik V",
   title: "Lead Developer & Architect",
   image: "/team/prajan.jpg",
-  summary: "Designed and built most of MediStock AI end to end, from the inventory data model to the AI assistant, and runs its testing, deployment and releases.",
+  summary: "Led the design and development of MediStock AI, from the inventory data model to the AI assistant, and runs its testing, deployment and releases.",
   github: "https://github.com/USER1043",
   linkedin: "https://linkedin.com/in/prajan-karthik",
+  highlights: [
+    { icon: Zap, title: "Answers in seconds", text: "Rebuilt the AI assistant around live inventory lookups, so most questions are answered in under 3 seconds." },
+    { icon: FlaskConical, title: "Tested on every change", text: "Nearly 600 automated tests run in CI on every pull request." },
+    { icon: HeartPulse, title: "Ready for small clinics", text: "Runs out of the box in any small clinic or pharmacy, built around the day-to-day needs of Padmanaba Medicals." },
+  ],
   built: [
     { icon: Boxes, title: "Batch-level inventory", text: "Per-batch stock, racks and FEFO expiry tracking" },
     { icon: BellRing, title: "Alerts engine", text: "Low-stock and expiry alerts, raised and cleared automatically" },
@@ -48,15 +61,29 @@ const LEAD = {
 const CONTRIBUTORS = [
   {
     name: "Kanish Kumaran M",
-    credit: "First versions of billing, access control and the Tamil voice assistant",
+    title: "Developer",
+    summary: "Built the first prototype of MediStock AI, including the original billing, login and Tamil voice features.",
     image: "/team/kanish.jpg",
+    github: "https://github.com/kanishmanickam",
     linkedin: "https://www.linkedin.com/in/kanishkumaranmm/",
+    built: [
+      { icon: Rocket, title: "Initial prototype", text: "First version of the MERN app" },
+      { icon: ReceiptIndianRupee, title: "Billing & login", text: "First versions of billing and role checks" },
+      { icon: Mic, title: "Tamil voice", text: "Chat widget and Tamil text-to-speech" },
+      { icon: Truck, title: "Suppliers", text: "Supplier and reorder screens" },
+    ],
   },
   {
     name: "Dheemant",
-    credit: "LSTM demand-forecasting model",
+    title: "ML Developer",
+    summary: "Built the LSTM model behind MediStock AI's demand forecasting.",
     image: "/team/dheemant.jpg",
+    github: "https://github.com/dheemant-u",
     linkedin: "https://www.linkedin.com/in/dheemantumapathy/",
+    built: [
+      { icon: BrainCircuit, title: "Forecasting model", text: "LSTM demand forecasting with TensorFlow.js" },
+      { icon: SlidersHorizontal, title: "Forecast setup", text: "Demand setup screen" },
+    ],
   },
 ];
 
@@ -74,6 +101,71 @@ const PhotoOrIcon = ({ src, alt, fallback, className = "", fallbackClassName = "
     <img src={src} alt={alt} onError={() => setFailed(true)} className={`${sizeClassName} rounded-xl object-cover shadow-sm ${className}`} />
   );
 };
+
+// One team member: the lead gets a larger photo, a title, a summary and a two-column list
+const MemberCard = ({ person, lead = false }) => (
+  <article className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
+    <div className="h-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500" />
+    <div className={`${lead ? "p-6 sm:p-10" : "p-6 sm:p-8"} flex flex-col flex-grow`}>
+      <div className={`flex ${lead ? "flex-col sm:flex-row sm:items-center gap-6 sm:gap-8" : "flex-col sm:flex-row sm:items-start gap-5"}`}>
+        <div className={`p-1.5 rounded-2xl bg-emerald-50 shrink-0 ${lead ? "self-start sm:self-center" : "self-start"}`}>
+          <PhotoOrIcon
+            src={person.image}
+            alt={person.name}
+            sizeClassName={lead ? "w-28 h-28 sm:w-32 sm:h-32" : "w-20 h-20"}
+            fallback={<UserRound className={lead ? "w-12 h-12 text-emerald-600" : "w-8 h-8 text-emerald-600"} />}
+          />
+        </div>
+        <div className="space-y-3 min-w-0">
+          <div>
+            <h3 className={`${lead ? "text-3xl" : "text-2xl"} font-extrabold text-slate-900 tracking-tight`}>{person.name}</h3>
+            {person.title && <p className="text-sm font-bold tracking-wide uppercase text-emerald-700 mt-1">{person.title}</p>}
+          </div>
+          {person.summary && <p className={`text-slate-600 leading-relaxed ${lead ? "text-lg" : ""}`}>{person.summary}</p>}
+          <div className="flex flex-wrap gap-3">
+            {person.github && (
+              <a href={person.github} target="_blank" rel="noopener noreferrer" aria-label={`${person.name} on GitHub`} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-700 transition-colors">
+                <Github className="w-4 h-4" aria-hidden="true" /> GitHub
+              </a>
+            )}
+            <a href={person.linkedin} target="_blank" rel="noopener noreferrer" aria-label={`${person.name} on LinkedIn`} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-800 text-sm font-semibold hover:border-sky-400 hover:text-sky-700 transition-colors">
+              <Linkedin className="w-4 h-4" aria-hidden="true" /> LinkedIn
+            </a>
+          </div>
+        </div>
+      </div>
+
+      {person.highlights && (
+        <ul className="mt-10 grid sm:grid-cols-3 gap-4">
+          {person.highlights.map(({ icon: Icon, title, text }) => (
+            <li key={title} className="p-5 rounded-xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-100">
+              <Icon className="w-6 h-6 text-emerald-600 mb-3" aria-hidden="true" />
+              <p className="font-bold text-slate-900">{title}</p>
+              <p className="text-sm text-slate-600 leading-relaxed mt-1">{text}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-8">
+        <h4 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4">{lead ? "What I built" : "Built"}</h4>
+        <ul className={`grid gap-3 ${lead ? "sm:grid-cols-2" : ""}`}>
+          {person.built.map(({ icon: Icon, title, text }) => (
+            <li key={title} className={`flex items-start gap-3 rounded-xl bg-slate-50 border border-slate-100 ${lead ? "p-3.5" : "p-4"}`}>
+              <div className="p-2 rounded-lg bg-white shadow-sm text-emerald-600 shrink-0">
+                <Icon className="w-5 h-5" aria-hidden="true" />
+              </div>
+              <div>
+                <p className="font-semibold text-slate-900">{title}</p>
+                <p className="text-sm text-slate-600 leading-relaxed">{text}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  </article>
+);
 
 const About = () => {
   return (
@@ -140,84 +232,12 @@ const About = () => {
             <p className="text-lg text-slate-600 font-medium">The people who built MediStock AI.</p>
           </div>
 
-          {/* Lead developer */}
-          <article className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="h-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500" />
-            <div className="p-6 sm:p-10">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-6 sm:gap-8">
-                <div className="p-1.5 rounded-2xl bg-emerald-50 shrink-0 self-start sm:self-center">
-                  <PhotoOrIcon
-                    src={LEAD.image}
-                    alt={LEAD.name}
-                    sizeClassName="w-28 h-28 sm:w-32 sm:h-32"
-                    fallback={<UserRound className="w-12 h-12 text-emerald-600" />}
-                  />
-                </div>
-                <div className="space-y-3 min-w-0">
-                  <div>
-                    <h3 className="text-3xl font-extrabold text-slate-900 tracking-tight">{LEAD.name}</h3>
-                    <p className="text-sm font-bold tracking-wide uppercase text-emerald-700 mt-1">{LEAD.title}</p>
-                  </div>
-                  <p className="text-slate-600 leading-relaxed text-lg">{LEAD.summary}</p>
-                  <div className="flex flex-wrap gap-3 pt-1">
-                    <a href={LEAD.github} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-700 transition-colors">
-                      <Github className="w-4 h-4" aria-hidden="true" /> GitHub
-                    </a>
-                    <a href={LEAD.linkedin} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-800 text-sm font-semibold hover:border-sky-400 hover:text-sky-700 transition-colors">
-                      <Linkedin className="w-4 h-4" aria-hidden="true" /> LinkedIn
-                    </a>
-                  </div>
-                </div>
-              </div>
+          <MemberCard person={LEAD} lead />
 
-              <div className="mt-10">
-                <h4 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4">What I built</h4>
-                <ul className="grid sm:grid-cols-2 gap-3">
-                  {LEAD.built.map(({ icon: Icon, title, text }) => (
-                    <li key={title} className="flex items-start gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
-                      <div className="p-2 rounded-lg bg-white shadow-sm text-emerald-600 shrink-0">
-                        <Icon className="w-5 h-5" aria-hidden="true" />
-                      </div>
-                      <div>
-                        <p className="font-semibold text-slate-900">{title}</p>
-                        <p className="text-sm text-slate-600 leading-relaxed">{text}</p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          </article>
-
-          {/* Contributors */}
-          <div className="space-y-4">
-            <h4 className="text-center text-sm font-bold text-slate-500 uppercase tracking-wider">Contributors</h4>
-            <ul className="flex flex-col sm:flex-row sm:items-stretch justify-center gap-4">
-              {CONTRIBUTORS.map((person) => (
-                <li key={person.name}>
-                  <a
-                    href={person.linkedin}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={`${person.name} on LinkedIn`}
-                    className="flex items-center gap-4 bg-white rounded-xl px-5 py-3 border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all h-full sm:w-80"
-                  >
-                    <PhotoOrIcon
-                      src={person.image}
-                      alt={person.name}
-                      sizeClassName="w-12 h-12"
-                      fallbackClassName="bg-slate-100"
-                      fallback={<UserRound className="w-6 h-6 text-slate-500" />}
-                    />
-                    <span className="flex-grow min-w-0">
-                      <span className="block font-semibold text-slate-900">{person.name}</span>
-                      <span className="block text-xs text-slate-500 leading-snug mt-0.5">{person.credit}</span>
-                    </span>
-                    <Linkedin className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
-                  </a>
-                </li>
-              ))}
-            </ul>
+          <div className="grid md:grid-cols-2 gap-8 items-start">
+            {CONTRIBUTORS.map((person) => (
+              <MemberCard key={person.name} person={person} />
+            ))}
           </div>
         </section>
       </div>
