@@ -20,10 +20,10 @@ import {
 // --- MODULAR CONFIGURATION (Swap details here) ---
 const FACULTY_NAME = "Dr. T. Senthil Kumar";
 const FACULTY_LINK = "https://www.amrita.edu/faculty/t-senthilkumar/";
-const FACULTY_IMAGE = "https://webfiles.amrita.edu/2014/01/hhLccN6D-Dr-Senthil-Kumar-T_associate-professor_cse_engineering_coimbatore.jpg";
+const FACULTY_IMAGE = "/about/faculty-senthil-kumar.jpg";
 const CLINIC_NAME = "Padmanaba Medicals";
 const CLINIC_LINK = "https://share.google/2v5bEfTay9SK1lG3i";
-const CLINIC_IMAGE = "https://lh3.googleusercontent.com/proxy/jNdNuojdxLD7TqK-MxFQTDS2w8QNYmLQ1AlYkLK1u3QTLTuyC6QR18ejR6bibkMCx4Ppf9lg1pxuUHZ1tgVoo3I49q41QMEZRCAWsajlRx8FbZMQqS5eVDnmhg5CuZGX-celRt83CiAMZCLPYVcrDJktxbt8cGMBdMydAg=s1360-w1360-h1020";
+const CLINIC_IMAGE = "/about/padmanaba-medicals.jpg";
 const FACULTY_TITLE = "Professor, Dept. of Computer Science and Engineering";
 
 // Shows the photo, or the fallback icon in a same-sized tile if the photo is missing or fails to load
