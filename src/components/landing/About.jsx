@@ -36,8 +36,8 @@ const LEAD = {
   built: [
     { icon: Boxes, title: "Batch-level inventory", text: "Per-batch stock, racks and FEFO expiry tracking" },
     { icon: BellRing, title: "Alerts engine", text: "Low-stock and expiry alerts, raised and cleared automatically" },
-    { icon: ReceiptIndianRupee, title: "Billing", text: "Full keyboard flow, stock limits and safe rollback" },
-    { icon: ShieldCheck, title: "Auth & access", text: "Roles, permissions and a password policy" },
+    { icon: ReceiptIndianRupee, title: "Billing flow", text: "Keyboard-first billing, stock limits and safe rollback" },
+    { icon: ShieldCheck, title: "Account security", text: "Password policy and access-control hardening" },
     { icon: LineChart, title: "Forecast review", text: "Workflow for approving reorder recommendations" },
     { icon: History, title: "Audit trail", text: "Activity log of who changed what, and when" },
     { icon: Bot, title: "AI assistant", text: "Inventory tool calls, Tamil and brand-name matching" },
@@ -46,8 +46,18 @@ const LEAD = {
 };
 
 const CONTRIBUTORS = [
-  { name: "Kanish Kumaran M", image: "/team/kanish.jpg", linkedin: "https://www.linkedin.com/in/kanishkumaranmm/" },
-  { name: "Dheemant", image: "/team/dheemant.jpg", linkedin: "https://www.linkedin.com/in/dheemantumapathy/" },
+  {
+    name: "Kanish Kumaran M",
+    credit: "First versions of billing, access control and the Tamil voice assistant",
+    image: "/team/kanish.jpg",
+    linkedin: "https://www.linkedin.com/in/kanishkumaranmm/",
+  },
+  {
+    name: "Dheemant",
+    credit: "LSTM demand-forecasting model",
+    image: "/team/dheemant.jpg",
+    linkedin: "https://www.linkedin.com/in/dheemantumapathy/",
+  },
 ];
 
 // Shows the photo, or the fallback icon in a same-sized tile if the photo is missing or fails to load
@@ -182,7 +192,7 @@ const About = () => {
           {/* Contributors */}
           <div className="space-y-4">
             <h4 className="text-center text-sm font-bold text-slate-500 uppercase tracking-wider">Contributors</h4>
-            <ul className="flex flex-col sm:flex-row justify-center gap-4">
+            <ul className="flex flex-col sm:flex-row sm:items-stretch justify-center gap-4">
               {CONTRIBUTORS.map((person) => (
                 <li key={person.name}>
                   <a
@@ -190,7 +200,7 @@ const About = () => {
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={`${person.name} on LinkedIn`}
-                    className="flex items-center gap-4 bg-white rounded-xl px-5 py-3 border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all sm:min-w-[16rem]"
+                    className="flex items-center gap-4 bg-white rounded-xl px-5 py-3 border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all h-full sm:w-80"
                   >
                     <PhotoOrIcon
                       src={person.image}
@@ -199,8 +209,11 @@ const About = () => {
                       fallbackClassName="bg-slate-100"
                       fallback={<UserRound className="w-6 h-6 text-slate-500" />}
                     />
-                    <span className="font-semibold text-slate-900 flex-grow">{person.name}</span>
-                    <Linkedin className="w-4 h-4 text-slate-400" aria-hidden="true" />
+                    <span className="flex-grow min-w-0">
+                      <span className="block font-semibold text-slate-900">{person.name}</span>
+                      <span className="block text-xs text-slate-500 leading-snug mt-0.5">{person.credit}</span>
+                    </span>
+                    <Linkedin className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
                   </a>
                 </li>
               ))}
