@@ -145,6 +145,8 @@ All backend tests live in `server/__tests__/` (`jest.config.js` matches only tha
 
 Files that keep a copy of a server file in the frontend (`stockLevel.js`, `passwordPolicy.js`) are checked against it in the matching suite.
 
+**CI.** `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`: `npm test` in `server/` (no secrets needed; `npm ci` downloads the `mongod` binary) and `npm run build` at the root.
+
 **Load test.** `billing.concurrency.test.js` sends `CONCURRENCY_LOAD` concurrent requests per scenario (default 40) and logs how many got `201`, `409` and so on:
 
 ```bash
@@ -155,7 +157,6 @@ CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.j
 **Gaps worth knowing:**
 
 - There's no frontend test setup. Frontend behaviour is checked by hand or with a headless browser.
-- No CI workflow runs the tests. The only workflow is release-please.
 - `computeForecast` is covered through the forecast-run tests (cold-start path) and the LSTM accuracy test, not on its own.
 
 ---
@@ -190,7 +191,7 @@ CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.j
 ## Known limitations
 
 - The first-owner bootstrap is manual.
-- No CI for tests, lint or build on pull requests.
+- CI runs tests and the frontend build, but there is no lint step.
 - No Dockerfile for the API; Compose only runs MongoDB.
 - Local-disk state (`uploads/`, `logs/`) doesn't suit horizontally scaled or ephemeral hosts.
 - The root `README.md` clone URL points to `kanishmanickam/Fullstack_Pharma_project`, and its env section omits `FRONTEND_URL`.
@@ -198,7 +199,7 @@ CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.j
 ## Future improvements
 
 - A `seed:admin` script (or an env-driven bootstrap) that creates the first owner.
-- A CI workflow on pull requests: install, `npm test`, `vite build`, and lint.
+- A lint step (ESLint) in CI.
 - A Dockerfile for the API and a Compose profile that runs the whole stack.
 - Object storage (S3/GCS) for generated PDFs; stdout-only logging, collected by the platform.
 
