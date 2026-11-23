@@ -48,7 +48,7 @@ The API host isn't pinned in the repo: nothing in it configures the backend's ho
 | `NODE_ENV` | | — | `development` adds stack traces to errors; `test` skips `app.listen` |
 | `JWT_EXPIRE` | | `7d` | Token lifetime |
 | `GEMINI_API_KEY` | | — | Without it the chatbot always uses the keyword fallback |
-| `GEMINI_API_URL` | | gemini-2.0-flash `generateContent` | Override the model endpoint |
+| `GEMINI_API_URL` | | gemini-3.5-flash-lite `generateContent` | Override the model endpoint |
 | `EMAIL_SERVICE` | | — | Nodemailer service name, e.g. `gmail` |
 | `EMAIL_USER`, `EMAIL_PASSWORD` | | — | SMTP credentials (for Gmail, an **app password**) |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER` | | — | WhatsApp notifications; skipped if missing |

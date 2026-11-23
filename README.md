@@ -11,7 +11,7 @@ A clinical-grade, full-stack pharmacy inventory and management system built with
 * **How it helps you**: The system automatically analyzes your last 90 days of sales to predict exactly how much of each medicine you will need in the coming weeks. It then **automatically drafts purchase orders** for your suppliers, taking the guesswork out of ordering, preventing empty shelves, and saving you from tying up cash in unsold "dead stock."
 
 ### 2. Hands-Free Bilingual Voice Assistant (Instant Stock Answers)
-* **The Technology**: Powered by a secure backend integration with **Google Gemini 2.0 Flash**.
+* **The Technology**: Powered by a secure backend integration with **Google Gemini 3.5 Flash-Lite**.
 * **How it helps you**: When your hands are full assisting customers or counting inventory, you and your staff can simply **speak to the system** in English or Tamil. Ask questions like *"Where is Paracetamol?"* or *"What is expiring soon?"*, and the chatbot will instantly retrieve the exact batch, current stock level, and rack location for you.
 
 ### 3. High-Accessibility Tamil Speech (Works on Any Device)
@@ -32,7 +32,7 @@ A clinical-grade, full-stack pharmacy inventory and management system built with
 
 * **Frontend**: React 18, Vite, Tailwind CSS, Material UI (MUI), Recharts
 * **Backend**: Node.js, Express, Mongoose (MongoDB Atlas / Docker Compose)
-* **AI & NLP**: TensorFlow.js, Google Gemini 2.0 Flash, Web Speech API (TTS/STT)
+* **AI & NLP**: TensorFlow.js, Google Gemini 3.5 Flash-Lite, Web Speech API (TTS/STT)
 * **Integrations**: Twilio API (WhatsApp), Nodemailer, PDFKit (Invoice Generation)
 * **Testing**: Jest, Supertest
 

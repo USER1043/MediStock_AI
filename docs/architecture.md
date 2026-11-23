@@ -23,7 +23,7 @@ flowchart LR
     app -- "bill notifications" --> customer
 
     app -- "documents (Mongoose)" --> db[("MongoDB<br/>Atlas or Docker")]
-    app -- "generateContent (HTTPS)" --> gemini["Google Gemini 2.0 Flash"]
+    app -- "generateContent (HTTPS)" --> gemini["Google Gemini 3.5 Flash-Lite"]
     app -- "WhatsApp messages" --> twilio["Twilio API"]
     app -- "SMTP email" --> gmail["Gmail (Nodemailer)"]
 ```
@@ -97,7 +97,7 @@ Full detail in [backend.md](backend.md).
 | Database | **MongoDB + Mongoose** | Medicine batches nest naturally inside a medicine document; flexible schema for audit `details` — see [ADR-0001](adr/0001-mongodb.md) |
 | Auth | **JWT** (`jsonwebtoken`) + **bcryptjs** + optional **TOTP 2FA** (`speakeasy`, `qrcode`) | Stateless API, no session store — see [ADR-0002](adr/0002-jwt-auth.md) |
 | Forecasting | **TensorFlow.js LSTM** in the API process | No separate Python service to deploy — see [ADR-0003](adr/0003-in-process-forecasting.md) |
-| Assistant | **Gemini 2.0 Flash** over REST, via backend | Cheap, fast, multilingual; key kept server-side — see [ADR-0004](adr/0004-gemini-via-backend.md) |
+| Assistant | **Gemini 3.5 Flash-Lite** over REST, via backend | Cheap, fast, multilingual; key kept server-side — see [ADR-0004](adr/0004-gemini-via-backend.md) |
 | Voice | **Web Speech API** + custom Tamil phonetic fallback | Free, in-browser; works without a native Tamil voice |
 | Notifications | **Twilio** (WhatsApp), **Nodemailer** (Gmail SMTP) | Pharmacy customers in India are reachable on WhatsApp |
 | Documents | **PDFKit** (invoices), **xlsx** (Excel import/export), **Multer** (uploads) | |

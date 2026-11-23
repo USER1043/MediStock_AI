@@ -1,6 +1,6 @@
 # Voice Assistant (Chatbot)
 
-> **TL;DR** — A floating chat widget (`Chatbot.jsx`) takes typed or spoken questions in **English or Tamil**, sends them to `POST /api/chatbot/query`, and reads the answer aloud. The server calls **Gemini 2.0 Flash** with a short system instruction and five read-only **inventory tools** (function calling): the model asks for only the data a question needs (one medicine, alternatives in a category, low stock, expiring batches, a summary), and the server runs those queries and sends back compact results. The last 3 exchanges per user are kept as memory. If Gemini fails, a **keyword-based fallback** answers from the database. The API key never leaves the server.
+> **TL;DR** — A floating chat widget (`Chatbot.jsx`) takes typed or spoken questions in **English or Tamil**, sends them to `POST /api/chatbot/query`, and reads the answer aloud. The server calls **Gemini 3.5 Flash-Lite** with a short system instruction and five read-only **inventory tools** (function calling): the model asks for only the data a question needs (one medicine, alternatives in a category, low stock, expiring batches, a summary), and the server runs those queries and sends back compact results. The last 3 exchanges per user are kept as memory. If Gemini fails, a **keyword-based fallback** answers from the database. The API key never leaves the server.
 
 ---
 
@@ -14,7 +14,7 @@ sequenceDiagram
     participant STT as Web Speech API
     participant API as chatbotController
     participant DB as MongoDB
-    participant G as Gemini 2.0 Flash
+    participant G as Gemini 3.5 Flash-Lite
     participant TTS as tamilTTS.js
 
     U->>W: speak (mic) or type

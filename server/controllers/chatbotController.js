@@ -8,7 +8,7 @@ import { isMedicineLowStock } from '../utils/stockLevel.js';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_API_URL =
   process.env.GEMINI_API_URL ||
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent';
 
 const userChatHistories = new Map(); // Store conversation memory per user
 
