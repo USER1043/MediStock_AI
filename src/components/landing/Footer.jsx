@@ -25,10 +25,10 @@ const Footer = () => (
             <a href="mailto:prjnkrthk@gmail.com" className="w-9 h-9 bg-white/10 border border-white/10 rounded-lg flex items-center justify-center hover:bg-white/20 transition-colors">
               <FaEnvelope className="text-sm" />
             </a>
-            <a href="https://github.com" target="_blank" rel="noreferrer" className="w-9 h-9 bg-white/10 border border-white/10 rounded-lg flex items-center justify-center hover:bg-white/20 transition-colors">
+            <a href="https://github.com/USER1043/MediStock_AI" target="_blank" rel="noreferrer" aria-label="MediStock AI on GitHub" className="w-9 h-9 bg-white/10 border border-white/10 rounded-lg flex items-center justify-center hover:bg-white/20 transition-colors">
               <FaGithub className="text-sm" />
             </a>
-            <a href="https://linkedin.com" target="_blank" rel="noreferrer" className="w-9 h-9 bg-white/10 border border-white/10 rounded-lg flex items-center justify-center hover:bg-white/20 transition-colors">
+            <a href="https://linkedin.com/in/prajan-karthik" target="_blank" rel="noreferrer" aria-label="Prajan Karthik on LinkedIn" className="w-9 h-9 bg-white/10 border border-white/10 rounded-lg flex items-center justify-center hover:bg-white/20 transition-colors">
               <FaLinkedin className="text-sm" />
             </a>
           </div>
