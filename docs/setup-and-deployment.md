@@ -1,6 +1,6 @@
 # Setup, Testing and Deployment
 
-> **TL;DR** — Run MongoDB (Docker Compose or Atlas), create `server/.env` from `.env.example` (including **`FRONTEND_URL`**), start the API with `npm run dev` in `server/` and the SPA with `npm run dev` at the root. Create the first owner account by hand, then seed demo data. Tests use Jest (`cd server && npm test`). The SPA deploys to Vercel as a static site; the API runs on any Node 18+ host. Releases are automated with release-please.
+> **TL;DR** — Either run the whole stack with Docker Compose (`docker compose --profile db up --build`, see [Docker](#docker)), or run MongoDB (Docker Compose or Atlas), create `server/.env` from `.env.example` (including **`FRONTEND_URL`**), start the API with `npm run dev` in `server/` and the SPA with `npm run dev` at the root. Create the first owner account by hand, then seed demo data. Tests use Jest (`cd server && npm test`). The SPA deploys to Vercel as a static site; the API runs on any Node 18+ host. Releases are automated with release-please.
 
 ---
 
@@ -27,7 +27,7 @@ flowchart LR
 
     subgraph local["Local development"]
         vite["vite dev server :5173"] --> api["nodemon server.js :5000"]
-        api --> mongo[("docker compose<br/>mongo:6.0 on 127.0.0.1:27017")]
+        api --> mongo[("docker compose --profile db<br/>mongo:7.0 on 127.0.0.1:27017")]
     end
 ```
 
@@ -62,7 +62,8 @@ The API host isn't pinned in the repo: nothing in it configures the backend's ho
 | Variable | Purpose |
 |----------|---------|
 | `VITE_API_BASE_URL` | API base, e.g. `http://localhost:5000/api`. **Set it**: the two axios clients have different fallbacks (5000 and 5002). |
-| `MONGO_ROOT_USER`, `MONGO_ROOT_PASSWORD` | Root credentials for the Docker Compose MongoDB |
+| `MONGO_ROOT_USER`, `MONGO_ROOT_PASSWORD` | Root credentials for the Docker Compose MongoDB (`db` profile). Default user `medistock`. The password goes into a connection string unescaped, so use letters, digits and `- _ . ~` only. |
+| `JWT_SECRET`, `MONGODB_URI`, `FRONTEND_URL` | Used by the Docker backend container; see [Docker](#docker). `.env.example` at the root lists them. |
 
 ---
 
@@ -74,7 +75,7 @@ npm install
 cd server && npm install && cd ..
 
 # 2. Database (or use an Atlas URI instead)
-docker compose up -d        # mongo:6.0, bound to 127.0.0.1:27017
+docker compose --profile db up -d mongodb   # only the database: mongo:7.0 on 127.0.0.1:27017
 
 # 3. Configure
 cp server/.env.example server/.env    # then edit: MONGODB_URI, JWT_SECRET, FRONTEND_URL
@@ -86,7 +87,44 @@ npm run dev                 # vite    → http://localhost:5173
 ```
 
 With the Docker database, `MONGODB_URI` needs the root credentials and `authSource`, e.g.
-`mongodb://admin:<password>@localhost:27017/medistock?authSource=admin`.
+`mongodb://medistock:<password>@localhost:27017/medistock?authSource=admin`.
+
+### Docker
+
+`docker-compose.yml` builds and runs the whole stack:
+
+| Service | Image | Port | Notes |
+|---------|-------|------|-------|
+| `frontend` | `Dockerfile` (root): Vite build served by nginx (`docker/nginx.conf`, SPA fallback to `index.html`) | `5173` | `VITE_API_BASE_URL` is a **build** argument (default `http://localhost:5000/api`); change it, then rebuild |
+| `backend` | `server/Dockerfile`: `node:22-alpine`, production dependencies, runs as `node` | `5000` | Health check on `/api/health`. Reads the root `.env` (add `GEMINI_API_KEY`, `EMAIL_*`, `TWILIO_*` there if needed) |
+| `mongodb` | `mongo:7.0`, data in the `mongodb_data` volume | `127.0.0.1:27017` | **Only with `--profile db`** |
+
+```bash
+cp .env.example .env    # set JWT_SECRET, and MONGO_ROOT_PASSWORD or MONGODB_URI
+
+# Option 1: with a local MongoDB container
+docker compose --profile db up --build -d
+
+# Option 2: with your own MongoDB (e.g. Atlas): set MONGODB_URI in .env, then
+docker compose up --build -d
+```
+
+The web app is on http://localhost:5173 and the API on http://localhost:5000/api. Without `MONGODB_URI`, the backend connects to the `db` profile's container. Started without that profile, it can't find a database and restarts until you set `MONGODB_URI` or add `--profile db`. A variable set in your shell overrides the one in `.env`.
+
+Create the first owner and seed demo data inside the backend container:
+
+```bash
+docker compose exec backend node --input-type=module -e "
+import mongoose from 'mongoose';
+import { User } from './models/userModel.js';
+await mongoose.connect(process.env.MONGODB_URI);
+await User.create({ username: 'owner', email: 'owner@example.com', password: 'Change-me#1', role: 'owner' });
+console.log('owner created'); process.exit(0);
+"
+docker compose exec backend node seedFiles/seedAll.js
+```
+
+Other commands: `docker compose logs -f backend`, `docker compose down` (stop; keeps the database volume), `docker compose --profile db down -v` (stop and **delete** the local database). The start-up banner prints the database URI with its username and password replaced by `***`.
 
 ### Create the first owner
 
@@ -196,7 +234,6 @@ CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.j
 
 - The first-owner bootstrap is manual.
 - No CI for tests, lint or build on pull requests.
-- No Dockerfile for the API; Compose only runs MongoDB.
 - Local-disk state (`uploads/`, `logs/`) doesn't suit horizontally scaled or ephemeral hosts.
 - The root `README.md` clone URL points to `kanishmanickam/Fullstack_Pharma_project`, and its env section omits `FRONTEND_URL`.
 
@@ -204,7 +241,6 @@ CONCURRENCY_LOAD=200 node --experimental-vm-modules node_modules/jest/bin/jest.j
 
 - A `seed:admin` script (or an env-driven bootstrap) that creates the first owner.
 - A CI workflow on pull requests: install, `npm test`, `vite build`, and lint.
-- A Dockerfile for the API and a Compose profile that runs the whole stack.
 - Object storage (S3/GCS) for generated PDFs; stdout-only logging, collected by the platform.
 
 ---

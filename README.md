@@ -67,8 +67,8 @@ Developer documentation lives in [`docs/`](docs/README.md): architecture and dia
      VITE_API_BASE_URL="http://localhost:5000/api"
      
      # MongoDB Root Credentials for Local Docker Compose
-     MONGO_ROOT_USER="admin"
-     MONGO_ROOT_PASSWORD="super_secret_password"
+     MONGO_ROOT_USER="medistock"
+     MONGO_ROOT_PASSWORD="letters-digits-only"   # goes into a connection string unescaped
      ```
 
    * **Backend Directory `server/.env`** (for secure keys - never exposed to the client):
@@ -89,7 +89,7 @@ Developer documentation lives in [`docs/`](docs/README.md): architecture and dia
      TWILIO_AUTH_TOKEN=your_twilio_token
      ```
 
-3. **Run the Application:**
+3. **Run the Application** (or run everything in Docker: `cp .env.example .env`, then `docker compose --profile db up --build`; see [docs/setup-and-deployment.md](docs/setup-and-deployment.md#docker)):
    ```bash
    # Terminal 1 - Frontend Dev Server
    npm run dev
