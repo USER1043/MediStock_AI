@@ -1,5 +1,68 @@
 # Changelog
 
+## [1.3.0](https://github.com/USER1043/MediStock_AI/compare/frontend-v1.2.1...frontend-v1.3.0) (2026-11-23)
+
+
+### Features
+
+* **activity-log:** show and filter by the new audit actions and modules ([b7a3b9f](https://github.com/USER1043/MediStock_AI/commit/b7a3b9fada3c50983cbc9964db4855b8890370c9))
+* **alerts:** add an Alerts page with a sidebar badge and link it from the dashboard ([bdf328f](https://github.com/USER1043/MediStock_AI/commit/bdf328f865c13659281bd7ed0a4238b2097d68b4))
+* **alerts:** generate alerts lazily, clear them automatically, treat resolve as acknowledge ([d88a9f5](https://github.com/USER1043/MediStock_AI/commit/d88a9f5d5c99411ecb74696767acc7c3bf257dc1))
+* **alerts:** raise one near_expiry/expired alert per batch ([4e35596](https://github.com/USER1043/MediStock_AI/commit/4e35596d86d6f3696e85d0329f156205eeb055e9))
+* **alerts:** re-raise an acknowledged batch alert when its expiry date is edited ([276fc61](https://github.com/USER1043/MediStock_AI/commit/276fc6160d7cd7615512ce3a3e1ccb181f75e9ca))
+* **alerts:** show one batch per expiry alert card ([797e778](https://github.com/USER1043/MediStock_AI/commit/797e7785f8d1e294ee4a8965d8257ddff0a49764))
+* **auth:** enforce a password policy for new passwords ([c4f87e0](https://github.com/USER1043/MediStock_AI/commit/c4f87e02e79bba10d5bfb347e80e046aed5d7a02))
+* **billing:** add medicines to the bill with the keyboard ([981606c](https://github.com/USER1043/MediStock_AI/commit/981606c26af794ea8ea3b331a58624ad2a0157cf))
+* **billing:** full keyboard flow and clearer stock limits in the bill ([1cc489f](https://github.com/USER1043/MediStock_AI/commit/1cc489f2456f6c59e7c4b5ec0d1034d3396aaabb))
+* **chatbot:** answer in one call, race a second model, answer offline correctly ([2682c38](https://github.com/USER1043/MediStock_AI/commit/2682c384af5eb7d9908019d54887f489102437f3))
+* **chatbot:** look up inventory with tool calls instead of sending all of it ([c1f2e3f](https://github.com/USER1043/MediStock_AI/commit/c1f2e3f6801d974e330cd7bcafd59e7834c8cb1a))
+* **customers:** edit customers and let owners delete them from the page ([4bb3638](https://github.com/USER1043/MediStock_AI/commit/4bb3638c6d1b0d8ca68aec165519f8dc9e7a4707))
+* **docker:** build and run the web app, API and an optional MongoDB ([641050b](https://github.com/USER1043/MediStock_AI/commit/641050b63770a45d62646ff49a788c381a04ecb6))
+* **forecast:** review page opens on everything awaiting a decision (new + adjusted) ([8011492](https://github.com/USER1043/MediStock_AI/commit/80114926e4fb8a98a54409b8be3bd5db9e0c1cd8))
+* **landing:** show an icon when an About photo fails to load ([0453f93](https://github.com/USER1043/MediStock_AI/commit/0453f93f691244b74be1f6a3a17b7b7c9e2ecfe4))
+* **users:** show password requirements in the User Management form ([eafccd0](https://github.com/USER1043/MediStock_AI/commit/eafccd08778699a42d67540fc32da718c450d260))
+
+
+### Bug Fixes
+
+* **alerts:** detect near-expiry and expired stock per batch ([2ac319a](https://github.com/USER1043/MediStock_AI/commit/2ac319aba448fe5387e422169d123e97f7dff6ab))
+* **alerts:** use returnDocument: 'after' in resolveAlert ([ddd09db](https://github.com/USER1043/MediStock_AI/commit/ddd09dbf3b16cbcfd5a037c96c394749aecb2a4e))
+* **audit:** record the real action and full endpoint for every write ([9e4d3a1](https://github.com/USER1043/MediStock_AI/commit/9e4d3a175a4ff8628cb8755a435f932218390f9e))
+* **audit:** redact secrets at any depth and by key name pattern ([1a69d71](https://github.com/USER1043/MediStock_AI/commit/1a69d7187acf34b7ac86c4523fab6846b97c5382))
+* **auth:** hash new passwords in updateUser with a static bcryptjs import ([003e87b](https://github.com/USER1043/MediStock_AI/commit/003e87bb51f59db811ea20168694fbf20dcb268c))
+* **auth:** keep password and twoFactorSecret out of queries and JSON ([751bfb6](https://github.com/USER1043/MediStock_AI/commit/751bfb6b590f208c1dac490caea063bfef35d523))
+* **auth:** make the User pre-save hook work on Mongoose 9 ([a6a2c62](https://github.com/USER1043/MediStock_AI/commit/a6a2c629305f334fe41731177fe0d47ce66b98cd))
+* **auth:** reject new passwords over 72 bytes (bcrypt's limit) ([30fc221](https://github.com/USER1043/MediStock_AI/commit/30fc2212612c7fdba3a2a756e20c0b79a0f38e79))
+* **billing:** roll back a failed bill without undoing other sales ([5509e84](https://github.com/USER1043/MediStock_AI/commit/5509e84a85c3fa995bc55afda5d9ac20f3347f26))
+* **billing:** show the real batch split and let quantity boxes be cleared ([a884a1f](https://github.com/USER1043/MediStock_AI/commit/a884a1f7155b0fd260639ce2513fc5ce775b2fc1))
+* **chatbot:** default to gemini-3.5-flash-lite ([ea91f45](https://github.com/USER1043/MediStock_AI/commit/ea91f456f5b54e9b3bfea1a44d1c5f7efcb6aacc))
+* **customers:** harden update, search and delete ([3f999ed](https://github.com/USER1043/MediStock_AI/commit/3f999ed24b978a8c0877e9f1278dc642a0226aa1))
+* **customers:** restore search filter and form state lost in Layout refactor ([c965659](https://github.com/USER1043/MediStock_AI/commit/c965659dbd2a9e8e16705f4b4e01921d26aae41d))
+* **expiry:** a batch expires at 00:00 IST on its expiry day ([9c2f2cd](https://github.com/USER1043/MediStock_AI/commit/9c2f2cd705dbc378c5788b91667df3e1f4977f91))
+* **forecast:** make retrain owner-only and skip it for staff imports ([2880a34](https://github.com/USER1043/MediStock_AI/commit/2880a34949bddf9a2d45903931330a5476dded68))
+* **forecast:** quantity-only recommendation PUT adjusts the draft; make the transition atomic ([a14b55f](https://github.com/USER1043/MediStock_AI/commit/a14b55f0a6515b69ed92b885e247d073070a08e2))
+* **forecast:** require a quantity of at least 1 in the recommendation dialog ([d276267](https://github.com/USER1043/MediStock_AI/commit/d276267e7ca600bf04ebd0c50d07c144faad12c2))
+* **forecast:** save AI drafts with valid priorities and never lose old drafts ([1403db8](https://github.com/USER1043/MediStock_AI/commit/1403db82642787b259e6d99b2b795d54fd4c337f))
+* **forecast:** staff review drafts, only the owner approves or deletes them ([3b842cc](https://github.com/USER1043/MediStock_AI/commit/3b842ccc748a6fc4cac6f37c7f3917249390a31a))
+* **import:** report row errors and anomalies by their Excel row number ([9ed498f](https://github.com/USER1043/MediStock_AI/commit/9ed498f7902338a674cc1fc973a20ff35633c5f7))
+* **import:** resolve Excel supplier names to Supplier ids and export names ([7e9155d](https://github.com/USER1043/MediStock_AI/commit/7e9155d47ad349fc66542ff17144768ccb1ee958))
+* **inventory:** explain an unknown stored supplier instead of a misleading required mark ([f396253](https://github.com/USER1043/MediStock_AI/commit/f3962536a940a50868ffd5d64b7b5584607b0129))
+* **inventory:** keep batch fields on grid rows so form edits can change stock ([c343ef7](https://github.com/USER1043/MediStock_AI/commit/c343ef797212b937523ce82e09622ac1955d30e1))
+* **inventory:** store medicine suppliers as supplier ids ([8c38428](https://github.com/USER1043/MediStock_AI/commit/8c38428c00b5854456fbebc0f5ee6f0a2cea2820))
+* **landing:** serve the About photos from public/about ([d8b0e35](https://github.com/USER1043/MediStock_AI/commit/d8b0e35d8b13f584e0d686e7e9f72037d00fe164))
+* **orders:** unique bill and purchase-order numbers ([97a14b3](https://github.com/USER1043/MediStock_AI/commit/97a14b385a3e9065a646051ce313d41e7a8de564))
+* **reorder:** give out-of-stock reorder drafts a valid priority ([d27121f](https://github.com/USER1043/MediStock_AI/commit/d27121f79f1a3034eb9e99a7aa8e74f9601cb97f))
+* **reorders:** remove the rule-based draft generator; show live stock on drafts ([758f20f](https://github.com/USER1043/MediStock_AI/commit/758f20f2c3b41f6da25b7756089fb5638c896808))
+* **seed:** never seed activity later than the moment the seed runs ([bd688d7](https://github.com/USER1043/MediStock_AI/commit/bd688d7f7044ce0505759ef8ce2fce4666ac03f5))
+* **server:** hide database credentials in the start-up banner ([407f875](https://github.com/USER1043/MediStock_AI/commit/407f8759e606825d7fa71514557de3cc62712527))
+* **stock:** one shared stock-level definition (out/critical/low/ok) for every low-stock path ([c885ed8](https://github.com/USER1043/MediStock_AI/commit/c885ed812704e56ec16b6acfcc7e9175b11cd476))
+* **ui:** mount the toast container and show server messages and retrain failures ([f81c171](https://github.com/USER1043/MediStock_AI/commit/f81c1710f632fe8df349ceee5f8443248a75e256))
+
+
+### Performance Improvements
+
+* **chatbot:** spend free-tier Gemini requests only where the model is needed ([b60a8bd](https://github.com/USER1043/MediStock_AI/commit/b60a8bdcf7fd8144c8988cb37514b5cebaa9b775))
+
 ## [1.2.1](https://github.com/USER1043/MediStock_AI/compare/frontend-v1.2.0...frontend-v1.2.1) (2026-10-25)
 
 
