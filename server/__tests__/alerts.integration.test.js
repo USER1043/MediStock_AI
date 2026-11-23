@@ -16,7 +16,11 @@ const { Alert } = await import('../models/alertModel.js');
 const { alertService } = await import('../services/alertService.js');
 
 const DAY = 24 * 60 * 60 * 1000;
-const daysFromNow = (n) => new Date(Date.now() + n * DAY);
+// Expiry dates are calendar days, and the app counts days from today in IST (utils/expiry.js). So the
+// expiry of a batch "n days away" is midnight UTC of (today in IST + n). Adding n * 24 h to the current
+// moment instead lands one day short between 00:00 and 05:30 IST, when the UTC date is still yesterday.
+const IST_OFFSET_MS = 330 * 60 * 1000;
+const daysFromNow = (n) => new Date((Math.floor((Date.now() + IST_OFFSET_MS) / DAY) + n) * DAY);
 
 const invoke = async (handler, req = {}) => {
   const res = {};
