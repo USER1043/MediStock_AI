@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import axiosInstance from '../../utils/axiosConfig';
-import { FaPlus, FaEdit, FaTrash, FaSearch, FaStar } from 'react-icons/fa';
+import { FaPlus, FaEdit, FaSearch, FaStar } from 'react-icons/fa';
 
 const SupplierManagement = () => {
   const [suppliers, setSuppliers] = useState([]);

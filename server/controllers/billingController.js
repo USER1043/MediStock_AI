@@ -9,6 +9,31 @@ import { sendBillNotification, sendEmailNotification, sendWhatsAppNotification }
 import { generateBillPDF } from '../utils/pdfGenerator.js';
 import log from '../utils/logger.js';
 
+// Compensating rollback for one bill line when there is no transaction. Other bills may have changed
+// the same medicine since this one deducted from it, so the units go back with $inc (quantity and each
+// batch it took from) instead of restoring an earlier snapshot, which would undo their deductions.
+// If one of those batches has since been removed, nothing is changed and the error is logged by the caller.
+const restoreDeduction = async ({ medicineId, quantityDeducted, batchDeductions }) => {
+  const inc = { quantity: quantityDeducted, __v: 1 };
+  const arrayFilters = [];
+  batchDeductions.forEach(({ batchId, quantity }, i) => {
+    inc[`batches.$[b${i}].quantity`] = quantity;
+    arrayFilters.push({ [`b${i}._id`]: batchId });
+  });
+  const batchIds = batchDeductions.map((d) => d.batchId);
+  const restored = await Medicine.findOneAndUpdate(
+    { _id: medicineId, ...(batchIds.length > 0 && { 'batches._id': { $all: batchIds } }) },
+    { $inc: inc },
+    { arrayFilters, returnDocument: 'after' }
+  );
+  if (!restored) throw new Error('Medicine or one of its batches no longer exists');
+  // stockStatus follows quantity; set it only if nobody has changed the quantity since (they set their own)
+  await Medicine.updateOne(
+    { _id: medicineId, quantity: restored.quantity },
+    { $set: { stockStatus: getStockStatus(restored.quantity, restored.reorderLevel) } }
+  );
+};
+
 // Create bill with atomic batch deductions, FEFO allocation, and concurrency protection
 export const createBill = async (req, res) => {
   const { customerId, customerName, customerType, items, paymentMethod } = req.body;
@@ -82,6 +107,8 @@ export const createBill = async (req, res) => {
         : [];
       let remainingToDeduct = item.quantity;
       const deductedBatchNumbers = [];
+      // What came out of each batch, so a rollback can add exactly that back
+      const batchDeductions = [];
 
       // Sort batches ascending by expiry (FEFO)
       updatedBatches.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
@@ -93,6 +120,7 @@ export const createBill = async (req, res) => {
           batch.quantity -= deduction;
           remainingToDeduct -= deduction;
           deductedBatchNumbers.push(batch.batchNumber);
+          batchDeductions.push({ batchId: batch._id, quantity: deduction });
         }
       }
 
@@ -135,9 +163,7 @@ export const createBill = async (req, res) => {
       completedDeductions.push({
         medicineId: medicine._id,
         quantityDeducted: item.quantity,
-        originalQuantity: medicine.quantity,
-        originalBatches: medicine.batches,
-        originalStockStatus: medicine.stockStatus,
+        batchDeductions,
       });
 
       billItems.push({
@@ -258,16 +284,7 @@ export const createBill = async (req, res) => {
       });
       for (const comp of completedDeductions) {
         try {
-          await Medicine.updateOne(
-            { _id: comp.medicineId },
-            {
-              $inc: { quantity: comp.quantityDeducted, __v: 1 },
-              $set: {
-                batches: comp.originalBatches,
-                stockStatus: comp.originalStockStatus,
-              },
-            }
-          );
+          await restoreDeduction(comp);
         } catch (rollbackErr) {
           log('ERROR', 'Compensating rollback failed', {
             error: rollbackErr.message,

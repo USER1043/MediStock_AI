@@ -73,6 +73,15 @@ const api = () => {
 // The audit middleware writes after 'finish' without awaiting; give the write time to land
 const settle = () => new Promise((r) => setTimeout(r, 150));
 
+// Polls `check` until it returns true (or fails after `timeoutMs`)
+const waitFor = async (check, timeoutMs = 5000) => {
+  const start = Date.now();
+  while (!(await check())) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out');
+    await new Promise((r) => setTimeout(r, 20));
+  }
+};
+
 const entries = async () => {
   await settle();
   return AuditLog.find().sort({ timestamp: 1, _id: 1 }).lean();
@@ -351,6 +360,9 @@ describe('forecasting', () => {
 
     // Only drafts can be deleted, so delete a second, still-unreviewed one (the approved PO is now Pending)
     const second = await api().post('/api/forecast/recommendations').send({ medicineId: med._id.toString(), optimalReorderQty: 5 });
+    // Its RECOMMENDATION_CREATED entry is written after the response; wait for it so it can't land
+    // after expectOneEntry below has cleared the log (a fixed sleep was not enough under load)
+    await waitFor(async () => (await AuditLog.countDocuments({ action: 'RECOMMENDATION_CREATED' })) === 1);
     const draftEndpoint = `/api/forecast/recommendations/${second.body.recommendation._id}`;
     await expectOneEntry(() => api().delete(draftEndpoint), {
       status: 200, action: 'RECOMMENDATION_DELETED', module: 'Forecasting', endpoint: draftEndpoint, method: 'DELETE',

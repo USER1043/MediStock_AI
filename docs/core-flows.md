@@ -302,7 +302,7 @@ Runs no longer delete alerts after 24 hours. They delete only **closed** alerts 
 
 ## Known limitations
 
-- **Billing atomicity depends on the MongoDB topology.** On a replica set (e.g. Atlas) a bill runs in a transaction. On a standalone server (e.g. the local Docker setup) it falls back to a compensating rollback, which restores each medicine's saved `batches` wholesale and could overwrite a change made by another request in between.
+- **Billing atomicity depends on the MongoDB topology.** On a replica set (e.g. Atlas) a bill runs in a transaction. On a standalone server (e.g. the local Docker setup) it falls back to a compensating rollback: each line already deducted gets its units added back with `$inc`, to the medicine's `quantity` and to each batch it took from, so sales made by other requests in between are kept. If one of those batches has been removed in the meantime, the rollback for that line is skipped and logged as an error. The bill as a whole is still not atomic: other requests can briefly see the partial deduction.
 - **The `__v` concurrency check only catches writers that bump `__v`.** All stock writers in the controllers do (`createBill`, `adjustQuantity`, `updateMedicine`, `createMedicine`, Excel import, PO receive); seed scripts and direct database edits don't.
 - **Transaction write conflicts return 500.** When two bills collide inside transactions, MongoDB's `WriteConflict` error surfaces as a 500 rather than the 409 "please retry" response.
 - **Received batches get a fake expiry** (now + 1 year) and rack `'Receiving Area'` until someone edits them.

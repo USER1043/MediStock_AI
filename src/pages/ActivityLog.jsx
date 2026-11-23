@@ -9,12 +9,10 @@ import {
     FaSearch,
     FaFilter,
     FaSyncAlt,
-    FaUser,
     FaCalendarAlt,
     FaChevronLeft,
     FaChevronRight,
     FaExclamationTriangle,
-    FaDownload,
 } from 'react-icons/fa';
 
 // ── Audit actions and modules ───────────────────────────────────
@@ -263,7 +261,7 @@ export default function ActivityLog() {
                             >
                                 <option value="">All Users</option>
                                 {users.map(u => (
-                                    <option key={u._id} value={u.username}>
+                                    <option key={u.id} value={u.username}>
                                         {u.username} ({u.role})
                                     </option>
                                 ))}
