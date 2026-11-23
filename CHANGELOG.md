@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0](https://github.com/USER1043/MediStock_AI/compare/frontend-v1.3.0...frontend-v1.4.0) (2026-11-23)
+
+
+### Features
+
+* **landing:** credit contributors in the About section ([5938302](https://github.com/USER1043/MediStock_AI/commit/5938302b5ba0a081f0507639061fc5821963ee89))
+* **landing:** redesign the team section around the lead developer ([2e29015](https://github.com/USER1043/MediStock_AI/commit/2e290158105651038a115ef7cf1d8df01ea79df0))
+* **landing:** refine the About section team cards ([d0d6a6d](https://github.com/USER1043/MediStock_AI/commit/d0d6a6d8e9b2880f4a92eab4df27a63ba69c9344))
+
 ## [1.3.0](https://github.com/USER1043/MediStock_AI/compare/frontend-v1.2.1...frontend-v1.3.0) (2026-11-23)
 
 
