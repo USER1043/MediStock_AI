@@ -85,6 +85,10 @@ app.get('/api/health', (req, res) => {
 app.use(notFound);
 app.use(errorHandler);
 
+// The connection string without its username and password, for the start-up banner
+// (it ends up in terminal and container logs)
+const maskMongoUri = (uri) => uri?.replace(/^(mongodb(?:\+srv)?:\/\/)[^@/]*@/, '$1***@');
+
 // Start server
 const PORT = process.env.PORT || 5000;
 
@@ -96,7 +100,7 @@ if (process.env.NODE_ENV !== 'test') {
       `API Server:  http://localhost:5000`,
       `Health:      http://localhost:5000/api/health`,
       `Environment: ${process.env.NODE_ENV || 'development'}`,
-      `Database:    ${process.env.MONGODB_URI || 'Not configured'}`
+      `Database:    ${maskMongoUri(process.env.MONGODB_URI) || 'Not configured'}`
     ].join('\n');
 
     const formattedBox = boxen(text, {
