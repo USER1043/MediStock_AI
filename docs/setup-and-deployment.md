@@ -47,8 +47,10 @@ The API host isn't pinned in the repo: nothing in it configures the backend's ho
 | `PORT` | | `5000` | API port |
 | `NODE_ENV` | | — | `development` adds stack traces to errors; `test` skips `app.listen` |
 | `JWT_EXPIRE` | | `7d` | Token lifetime |
-| `GEMINI_API_KEY` | | — | Without it the chatbot always uses the keyword fallback |
-| `GEMINI_API_URL` | | gemini-2.0-flash `generateContent` | Override the model endpoint |
+| `GEMINI_API_KEY` | | — | Without it the chatbot always answers offline from the inventory (see [chatbot.md](chatbot.md#4-fallbacks-in-layers)) |
+| `GEMINI_MODELS` | | `gemini-3.5-flash-lite,gemini-flash-lite-latest` | Comma-separated models to try in order; a busy, rate-limited or slow model moves to the next one |
+| `GEMINI_API_URL` | | — | Older setting: replaces the endpoint of the first model. Prefer `GEMINI_MODELS` |
+| `CHATBOT_DIRECT_ANSWERS` | | `true` | `false` sends every chatbot question to the model, even ones the inventory lookups fully answer (more natural wording, more free-tier requests) |
 | `EMAIL_SERVICE` | | — | Nodemailer service name, e.g. `gmail` |
 | `EMAIL_USER`, `EMAIL_PASSWORD` | | — | SMTP credentials (for Gmail, an **app password**) |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER` | | — | WhatsApp notifications; skipped if missing |

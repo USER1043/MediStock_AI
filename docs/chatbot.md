@@ -1,6 +1,6 @@
 # Voice Assistant (Chatbot)
 
-> **TL;DR** — A floating chat widget (`Chatbot.jsx`) takes typed or spoken questions in **English or Tamil**, sends them to `POST /api/chatbot/query`, and reads the answer aloud. The server builds a **live inventory snapshot**, injects it into a system prompt, and calls **Gemini 2.0 Flash**, keeping the last 3 exchanges per user as memory. If Gemini fails, a **keyword-based fallback** answers from the same data. The API key never leaves the server.
+> **TL;DR** — A floating chat widget (`Chatbot.jsx`) takes typed or spoken questions in **English or Tamil**, sends them to `POST /api/chatbot/query`, and reads the answer aloud. The server first **looks up what the question names** (medicines, including brand names and Tamil spellings; categories like "acidity"; low stock; expiry; sales). When that answers the whole question, it **answers directly with no model call**. Otherwise it sends the data with the question to **Gemini 3.5 Flash-Lite**, which usually answers in **one call** and can still call five read-only **inventory tools**. The free-tier quota is protected by a cache, a cooldown on models that return 429/503, and a per-user limit. A busy or slow model is retried on a second model, and if no answer arrives within **12 s** the server answers from the looked-up data. The last 3 exchanges per user are kept as memory. The API key never leaves the server.
 
 ---
 
@@ -14,7 +14,7 @@ sequenceDiagram
     participant STT as Web Speech API
     participant API as chatbotController
     participant DB as MongoDB
-    participant G as Gemini 2.0 Flash
+    participant G as Gemini 3.5 Flash-Lite
     participant TTS as tamilTTS.js
 
     U->>W: speak (mic) or type
@@ -23,42 +23,102 @@ sequenceDiagram
         STT-->>W: transcript
     end
     W->>API: POST /api/chatbot/query {message, language}
-    API->>DB: Medicine.find() and today's Bills
-    API->>API: buildInventoryContext() → text snapshot
-    API->>API: buildSystemPrompt(context, language)
     API->>API: load last 6 messages for req.user.id
-    API->>G: generateContent(history + [system context + user message])
-    alt Gemini OK
-        G-->>API: text
-        API->>API: append to history, trim to 6
-    else error / no key / empty
-        API->>API: keywordFallback(message, medicines, language)
+    API->>DB: analyzeQuestion(): the tools the question clearly needs
+    alt the lookups answer the whole question
+        API->>API: buildFallbackAnswer() (source: direct, no model call)
+    else same question, same data, within 5 min
+        API->>API: cached answer (source: cache)
     end
-    API-->>W: {response, source: gemini | fallback, disclaimer}
+    API->>G: generateContent(system prompt, history, question + looked-up data, tools)
+    opt the looked-up data does not cover it (up to 4 rounds)
+        G-->>API: functionCall(s), e.g. search_medicines {query}
+        API->>DB: runTool(): one small query per call
+        API->>G: functionResponse(s) with compact JSON results
+    end
+    alt Gemini answers in time (12 s)
+        G-->>API: text
+        API->>API: append question and answer to history, trim to 6
+    else busy / rate-limited / slow on every model, no key, or still calling tools
+        API->>API: buildFallbackAnswer(looked-up data, language)
+    end
+    API-->>W: {response, source: direct | cache | gemini | fallback, disclaimer}
     W->>TTS: speakTamil / speakEnglish(response)
     TTS-->>U: audio
 ```
 
 ---
 
-## 2. Prompt construction
+## 2. Prompt, lookups and tools
 
-**Inventory context.** Rebuilt on every request from the live database:
+**System instruction** (`buildSystemPrompt`, sent in Gemini's `systemInstruction` field). It carries no inventory data, only today's date (IST) and the directives:
 
-- Summary: total medicines, low-stock count, today's sales total and bill count.
-- One line per medicine: name, category, **active batches** (only `quantity > 0` and not expired) with rack, quantity and expiry, total quantity, and price. A medicine with no active batch is labelled *"Out of Stock / Expired"*.
+1. Answer from the looked-up data when it is there; otherwise, or for anything it doesn't cover, use the tools (several in one turn if needed). Never guess stock, prices, racks or dates.
+2. A medicine is in stock **only** if it has an active batch (`inStock: true`); say so when its stock has expired.
+3. If it's unavailable, suggest in-stock medicines of the same category.
+4. Always state the **rack number** of the batch to use first (earliest expiry) when confirming stock.
+5. Keep a clinical tone; **no medical advice** (dosage, diagnosis), inventory questions only.
+6. **Plain text** (the widget shows text as-is, so no Markdown), `•` for lists, at most 6 short lines, no greetings.
+7. Respond in Tamil or English, following the `language` field.
 
-**System directives** (in `buildSystemPrompt`):
+**Lookups before the model call** (`server/services/chatbotPrefetch.js`). Each extra tool round trip costs another slow, rate-limited Gemini request, so the server runs the obvious lookups itself and appends the results to the question:
 
-1. A medicine is in stock **only** if it has an active batch.
-2. If it's unavailable, suggest in-stock alternatives from the **same category**.
-3. Always state the **rack number** when confirming stock.
-4. Keep a clinical tone; **no medical advice** (dosage, diagnosis), inventory questions only.
-5. Respond in Tamil or English, following the `language` field.
+| The question… | Looked up |
+|---|---|
+| names a medicine (exact, a 4+ letter prefix like "amox", a small typo like "paracetmol", a **brand** like "Dolo 650" → paracetamol, or **Tamil script** like "பாராசிட்டமால்") | `search_medicines` for up to 3 names, plus `find_alternatives` for any that can't be sold |
+| mentions low stock / reorder / குறைந்த | `list_low_stock` |
+| mentions expiry / காலாவதி (with "N days" if given) | `list_expiring_batches` |
+| mentions summary / sales / விற்பனை | `get_inventory_summary` |
+| names nothing but points back ("and **its** rack?", "அதன் விலை?") | the medicines named in the previous question |
+| names no medicine but a category, by name or an everyday word ("anything for **acidity**?", "pain", "allergy", "இருமல்") | `find_alternatives` for that category: what is in stock (`CATEGORY_HINTS`) |
+
+Tamil names are matched by a **sound skeleton**: vowels dropped, voiced and unvoiced consonants in one class, repeats collapsed. "பாராசிட்டமால்" and "paracetamol" both become `prstml`. Brand names come from a short table (`BRAND_TO_GENERIC`). Only medicine **names** are read to find matches; the full records are fetched only for the matches.
+
+**Direct answers.** If every word of the question was recognised (medicine names, brands, categories, topics, or filler such as "do we have", "rack", "price", "இருக்கா"), the lookups answer all of it and `buildFallbackAnswer` replies with no model call. A question with anything else ("which is **cheaper**…", "**why** is…", "can I give it to a **child**?") goes to the model. Set `CHATBOT_DIRECT_ANSWERS=false` to send every question to the model.
+
+**Tools** (`server/services/chatbotTools.js`). All are read-only, run one small query, and return at most 15 medicines or batches (with `truncated` and `total` when there are more). Stock and expiry follow the app's shared rules (`utils/stockLevel.js`, `utils/expiry.js`): an **active batch** has stock left and hasn't expired (from 00:00 IST on its expiry day).
+
+| Tool | Arguments | Returns |
+|------|-----------|---------|
+| `search_medicines` | `query` (part of the name) and/or `category` | Matching medicines: `inStock`, `sellableQuantity`, expired stock still on the shelf, total quantity, reorder level, stock level, price, active batches (batch, rack, quantity, expiry, days left; earliest first) |
+| `find_alternatives` | `category`, optional `exclude` (name) | In-stock medicines of that category, most stock first |
+| `list_low_stock` | — | Medicines at or below their reorder level, most urgent first, with the rack to use first |
+| `list_expiring_batches` | optional `days` (1–180, default 30) | Batches with stock that have expired or expire within the window, soonest first, with racks |
+| `get_inventory_summary` | — | Counts (medicines, low stock, medicines with expired stock), categories, today's sales (from 00:00 IST) |
+
+**The loop** (`callGeminiAPI`). The model replies either with text (the answer) or with one or more `functionCall`s. The server runs every call (`runTool`, which never throws: an unknown tool or a failed query comes back as `{ error }`), appends the model's turn and the `functionResponse`s, and asks again. After 4 rounds of tool calls without an answer (1 round when data was sent with the question) it gives up and the offline answer is used. Each answer is logged with its time, the models used, what was looked up and any retries.
+
+**Models, retries and time limits.** `GEMINI_MODELS` (default `gemini-3.5-flash-lite,gemini-flash-lite-latest`) are tried in order; different models have separate free-tier quotas.
+
+| Situation | What happens |
+|---|---|
+| 503 (busy), 429 (quota), 5xx, 404 (model retired), network error | The same request goes to the next model at once |
+| No reply after **4 s** | The same request also goes to the next model; the first answer wins and the other request is cancelled |
+| A call runs **10 s** | It is abandoned |
+| No answer **12 s** after the question arrived | The offline answer is used |
+| 400 / 401 / 403 (bad request or key) | Not retried: it would fail on every model |
+
+**Request budget.** The free tier limits requests per minute and per day for each model; a call is about 1,000 input tokens, so tokens are not the constraint, requests are.
+
+| Saving | How |
+|---|---|
+| Direct answers | Questions the lookups fully answer never reach the model |
+| Answer cache | The same question (case and trailing `?` ignored) about the same data is answered from memory for 5 minutes, across users. The looked-up data is part of the key, so any stock change means a new answer. The conversation is part of the key only for follow-ups ("and its rack?") |
+| Cooldown | A model that returns 429 is skipped until its `retryDelay` (default 60 s), one that returns 503 for 15 s. If every model is cooling down, the answer comes from the inventory at once, with no request |
+| Fewer rounds | With data attached the model gets 1 extra tool round, not 4 |
+| Per-user limit | One user gets at most 12 model answers a minute; beyond that, direct answers, so one person can't use up the shared quota |
+| Racing a second model | Only when the other model isn't cooling down |
 
 **Generation config:** `temperature 0.3` (factual, low creativity), `maxOutputTokens 600`, `topK 40`, `topP 0.95`.
 
-**How the prompt is sent.** Gemini's `contents` array has no system role here, so the system prompt is prepended to the latest user turn inside `[SYSTEM CONTEXT - HIDDEN FROM USER] … [END SYSTEM]` markers. Earlier turns go in as plain `user` / `model` messages.
+**Measured (live, 24 Nov 2026, free tier, 16 questions in English and Tamil):**
+
+| | Tools only | + lookups first | + direct answers, cache, cooldown |
+|---|---|---|---|
+| Gemini requests | ~2–5 per question | ~1–2 per question | **5 for all 16** (12 answered directly) |
+| Typical answer time | 7–20 s | 1–3 s | **0.1–0.6 s** direct, 1–3 s with the model |
+| Slowest answer | 63 s (one call) | 12 s (offline answer) | 5 s |
+| When Gemini was busy | Generic message, or expired stock shown as available | Correct answer from the looked-up data | Same, and the busy model is skipped for a while |
 
 ---
 
@@ -66,7 +126,7 @@ sequenceDiagram
 
 - `userChatHistories`: an in-process `Map<userId, Array<{role, text}>>`.
 - Keeps the last **6 messages** (3 exchanges) per user.
-- Only the plain question and answer are stored, not the inventory snapshot, so memory stays small and each answer uses fresh stock data.
+- Only the plain question and answer are stored, never tool calls or tool results, so memory stays small and each answer looks up fresh stock data.
 
 ---
 
@@ -74,11 +134,14 @@ sequenceDiagram
 
 | Layer | Trigger | Behaviour |
 |-------|---------|-----------|
-| Server keyword fallback | Gemini throws, times out, no API key, or an empty candidate | Matches "low stock"/"reorder", "expir", or a medicine name (first word); answers in the selected language |
+| Direct answer | The lookups answer the whole question | `buildFallbackAnswer`, no model call (`source: direct`) |
+| Cache | Same question about the same data within 5 minutes | The earlier model answer (`source: cache`) |
+| Second model | The first model is busy, rate-limited, retired or slow | The same request on the next model in `GEMINI_MODELS` (see above) |
+| Offline answer (`buildFallbackAnswer`) | No answer within 12 s on any model, every model cooling down, the user over 12 questions a minute, no API key, an empty reply, or still calling tools after the round limit | Built from the same looked-up data, in English or Tamil: availability with the batch and rack to use first, expired stock called out as not sellable, same-category alternatives, low-stock and expiry lists, the summary, brand-name notes. If nothing was looked up, a short help message |
 | Client fallback | The backend request fails entirely | `getSmartResponse` can use a predefined keyword→answer map; the widget passes `null`, so it shows an error message instead |
 | TTS fallback | No Tamil system voice | `tamilTTS.js` converts Tamil script to an English phonetic approximation and speaks it with an available voice |
 
-The response always includes `source` so the UI (and debugging) can tell which path answered.
+The response always includes `source` (`direct`, `cache`, `gemini` or `fallback`) so the UI (and debugging) can tell which path answered.
 
 ---
 
@@ -92,34 +155,33 @@ The response always includes `source` so the UI (and debugging) can tell which p
 
 ## Design decisions
 
-- **Retrieval by context stuffing, not RAG.** A single pharmacy has hundreds, not millions, of SKUs, so the whole inventory fits in the prompt. No vector store or embeddings to maintain, and the answer always reflects live stock.
+- **Retrieval by tool calls, not context stuffing or RAG.** The model asks the database for exactly what a question needs through typed, read-only tools. The prompt stays the same size however large the catalogue gets, there is no vector store to maintain, and answers always reflect live stock.
 - **Server-side proxy for the LLM.** Keeps the key secret, allows auth and auditing, and lets the server add live data. See [ADR-0004](adr/0004-gemini-via-backend.md).
+- **Look up first, then ask the model.** Most pharmacy questions name a medicine or a topic, so the server fetches that data itself; the model usually needs one call instead of several, and the offline answer uses the same data.
+- **Race a second model instead of waiting.** The free tier is often busy; starting a second request after 4 s cuts the slow cases without doubling normal traffic.
 - **Low temperature and strict directives** to reduce hallucinated stock or rack numbers.
 - **Graceful degradation.** A pharmacy counter can't stall because an external AI is down, so a deterministic fallback always answers.
 - **Browser speech APIs** cost nothing and add no server dependency.
 
 ## Known limitations
 
-- **Prompt size grows with the catalogue.** Every request sends *every* medicine. With thousands of SKUs this hits token limits and raises cost and latency.
-- **Two full inventory reads per request.** `Medicine.find()` runs once in the handler (for the fallback) and again inside `buildInventoryContext()`.
+- **The free tier is busy.** During testing about 1 in 5 calls returned 503 or 429. The second model and the offline answer cover this.
+- **Direct answers are templated**, not conversational: accurate and instant, but the same wording each time. `CHATBOT_DIRECT_ANSWERS=false` trades requests for phrasing.
+- **The cache, cooldowns and per-user counters are in-process**, like the chat history: per server instance, reset on restart.
+- **Name matching is heuristic.** A medicine that is only described ("something for allergies") or a brand missing from `BRAND_TO_GENERIC` goes to the model's tools, which takes more round trips.
+- **Tool results are capped at 15 items**, so a broad question ("everything expiring this year") gets the first 15 and a `truncated` flag.
 - **In-memory history** is lost on restart, isn't shared across instances, and grows with the number of distinct users (no eviction).
-- **Prompt injection.** User text and the system context share one message. A user could try "ignore previous instructions"; the impact is limited to what's already in the prompt (inventory data), but it isn't defended against.
-- **`safetySettings` are all `BLOCK_NONE`.**
-- **The API key goes in the URL query string** (`?key=`), not the `x-goog-api-key` header.
-- **Keyword fallback is naive**: it matches the first word of each medicine name as a substring, e.g. "para" matches every "Paracetamol …" product.
+- **Prompt injection.** A user could try "ignore previous instructions". The tools are read-only inventory queries, so the most a model can be talked into is reading inventory data the user could see in the app anyway.
 - **The phonetic map is partial** (common consonant-vowel combinations only) and contains a few non-Tamil characters (Telugu, Bengali and Devanagari) on the `ர` row, which should be cleaned up.
 
 ## Future improvements
 
-- **Retrieve before prompting:** extract the medicine or category the user mentions (keyword or embeddings) and include only relevant rows, plus the summary.
-- Use Gemini **function calling** (`getStock(name)`, `getExpiring(days)`), letting the model query the database through typed tools rather than reading a dump.
 - Put chat history in Redis with a TTL.
-- Use the API's `systemInstruction` field instead of inlining the system prompt; send the key in a header; use sensible safety thresholds.
+- Grow `BRAND_TO_GENERIC`, or store brand names on each medicine.
 - Stream responses to the UI to reduce perceived latency.
-- Cache the inventory context for a few seconds to absorb bursts.
 
 ---
 
 ## Related files
 
-`server/controllers/chatbotController.js` · `server/routes/chatbotRoutes.js` · `src/components/Chatbot.jsx` · `src/utils/geminiAPI.js` · `src/utils/tamilTTS.js`
+`server/controllers/chatbotController.js` · `server/services/chatbotTools.js` · `server/services/chatbotPrefetch.js` · `server/routes/chatbotRoutes.js` · `src/components/Chatbot.jsx` · `src/utils/geminiAPI.js` · `src/utils/tamilTTS.js`
