@@ -9,7 +9,7 @@ const stack = [
   { name: 'Node.js', icon: FaNodeJs, color: '#68A063', desc: 'Runtime' },
   { name: 'Express', icon: SiExpress, color: '#888', desc: 'Backend API' },
   { name: 'MongoDB', icon: SiMongodb, color: '#47A248', desc: 'Database' },
-  { name: 'Gemini AI', icon: SiGooglegemini, color: '#8B5CF6', desc: 'AI Engine' },
+  { name: 'Gemini AI', icon: SiGooglegemini, color: '#8B5CF6', desc: 'Chatbot Engine' },
   { name: 'JWT', icon: SiJsonwebtokens, color: '#F59E0B', desc: 'Auth Tokens' },
   { name: 'SheetJS', icon: FaFileExcel, color: '#217346', desc: 'Excel Parser' },
 ];

@@ -9,7 +9,7 @@ const features = [
     color: 'from-purple-500 to-indigo-600',
     badge: 'AI',
     title: 'AI Demand Forecasting',
-    description: 'Gemini-powered AI analyses your sales history and auto-generates reorder recommendations with High / Medium / Low priority.',
+    description: 'An LSTM model (TensorFlow.js) learns from your sales history and auto-generates reorder recommendations with High / Medium / Low priority.',
   },
   {
     icon: FaBell,
@@ -44,7 +44,7 @@ const features = [
     color: 'from-orange-500 to-amber-600',
     badge: 'Voice',
     title: 'Voice & Bilingual Chatbot',
-    description: 'Ask inventory questions in English or Tamil — by typing or voice. The AI answers from live database data instantly.',
+    description: 'Ask inventory questions in English or Tamil, by typing or voice, even by brand name. Answers come from live stock, with rack numbers and in-stock alternatives.',
   },
   {
     icon: FaFileMedical,

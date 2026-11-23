@@ -1,10 +1,11 @@
 import { FaRobot, FaMicrophone, FaLanguage, FaDatabase, FaCheckCircle } from 'react-icons/fa';
 
 const highlights = [
-  'Asks real inventory questions — "How many Paracetamol do we have?"',
-  'Identifies low-stock and near-expiry medicines instantly',
-  'Fetches live data from MongoDB on every query',
-  'Supports English & Tamil with voice input and TTS',
+  'Ask it naturally — "Do we have Dolo 650?", "anything for acidity?", "and its rack?"',
+  'Never reports expired stock as available: flags it and suggests in-stock alternatives with racks',
+  'Simple lookups are answered instantly from the database; Gemini handles the rest',
+  'Keeps answering from live stock even when the AI service is busy',
+  'English & Tamil, typed or spoken, with answers read aloud',
   'Secured behind JWT — only authenticated users can access it',
 ];
 
@@ -23,8 +24,9 @@ const AISection = () => (
             <span className="bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent"> Knows Your Stock</span>
           </h2>
           <p className="text-lg text-gray-500 mb-8 leading-relaxed">
-            Unlike generic AI chatbots, MediStock AI injects your live pharmacy database into every Gemini query.
-            It answers specific, real questions about your inventory — not templated responses.
+            Unlike generic AI chatbots, MediStock AI looks up exactly what each question needs from your live
+            inventory (the medicine, its batches and racks, or what is low or expiring) and answers from that.
+            It recognises brand names, typos and Tamil spellings, and never guesses a stock level or a rack.
           </p>
           <ul className="space-y-3 mb-8">
             {highlights.map((h, i) => (
@@ -67,10 +69,10 @@ const AISection = () => (
           {/* Conversation */}
           <div className="space-y-4">
             {[
+              { user: true, text: 'Do we have Dolo 650?' },
+              { user: false, text: 'Dolo is a brand of paracetamol.\nParacetamol: not available. All 200 units on the shelf have expired; remove them.\n\nIn-stock Analgesic alternatives:\n• Aspirin: 500 units, ₹10, rack A1' },
               { user: true, text: 'Which medicines are low on stock?' },
-              { user: false, text: 'Currently 3 medicines are at or below reorder level:\n• Amoxicillin 250mg — 12 units (reorder: 40)\n• Metformin 500mg — 8 units (reorder: 45)\n• Losartan 50mg — 5 units (reorder: 30)\n\nI recommend placing orders immediately.' },
-              { user: true, text: 'What is the selling price of Paracetamol?' },
-              { user: false, text: 'Paracetamol 500mg:\n• Selling: ₹9.00\n• Purchase: ₹4.50\n• Stock: 120 units | Rack: A-01' },
+              { user: false, text: 'Low stock (most urgent first):\n• Ibuprofen: 30 units, rack A3 (critical)\n• Amoxicillin: 45 units, rack B2 (critical)\n• Omeprazole: 80 units, rack C1 (low)' },
             ].map((m, i) => (
               <div key={i} className={`flex ${m.user ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-line ${m.user
