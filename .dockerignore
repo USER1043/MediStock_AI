@@ -1,0 +1,11 @@
+# Frontend image context (repo root). The backend builds from server/ with its own .dockerignore.
+node_modules
+dist
+server
+.git
+.github
+.env
+.env.*
+docs
+Dockerfile
+docker-compose.yml

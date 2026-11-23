@@ -1,23 +1,66 @@
-version: '3.8'
+# MediStock: web app (nginx), API (Node) and, optionally, a local MongoDB.
+#
+#   cp .env.example .env                      # then edit it
+#   docker compose --profile db up --build    # app + local MongoDB container
+#   docker compose up --build                 # app only, using MONGODB_URI from .env (e.g. Atlas)
+#
+# Web app: http://localhost:5173 · API: http://localhost:5000/api (health: /api/health)
+# See docs/setup-and-deployment.md, "Docker".
+
 services:
-  mongodb:
-    image: mongo:6.0
-    container_name: medistock-mongodb
-    ports:
-      - "127.0.0.1:27017:27017" # Restricts access to localhost only
+  backend:
+    build: ./server
+    image: medistock-backend
+    env_file:
+      - path: .env
+        required: false
     environment:
-      # Strictly sourced from .env file
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      NODE_ENV: production
+      PORT: 5000
+      # Without MONGODB_URI the API uses the `db` profile's container
+      MONGODB_URI: ${MONGODB_URI:-mongodb://${MONGO_ROOT_USER:-medistock}:${MONGO_ROOT_PASSWORD:-}@mongodb:27017/medistock?authSource=admin}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+    ports:
+      - "5000:5000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+        required: false # only when the `db` profile is enabled
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5000/api}
+    image: medistock-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Started only with `--profile db`
+  mongodb:
+    profiles: ["db"]
+    image: mongo:7.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-medistock}
+      # Required with this profile; the mongo image refuses to start with a user but no password
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-}
       MONGO_INITDB_DATABASE: medistock
+    ports:
+      - "127.0.0.1:27017:27017" # reachable from this machine only (e.g. Compass, seed scripts)
     volumes:
       - mongodb_data:/data/db
-    networks:
-      - medistock-network
-
-networks:
-  medistock-network:
-    driver: bridge
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
 
 volumes:
   mongodb_data:
