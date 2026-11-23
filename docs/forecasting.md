@@ -92,7 +92,7 @@ The cold-start path uses the same shape with `daily = reorderLevel / 30` and `ad
 
 ## 4. Accuracy
 
-`server/tests/accuracy.test.js` trains the LSTM on synthetic series:
+`server/__tests__/accuracy.test.js` trains the LSTM on synthetic series:
 
 - **Linear trend** (`10 + 2i`, 40 days): the 7-day total must be within **25%** of the true continuation.
 - **Sine-wave seasonality** (60 days): the forecast must be non-constant and positive. This checks that the model learned something, not that it is accurate.
@@ -144,4 +144,4 @@ In the UI, `GET /api/forecast/trend` shows 14 days of actual sales against predi
 
 ## Related files
 
-`server/ml/demandForecast.js` · `server/ml/lstmModel.js` · `server/controllers/forecastController.js` · `server/models/forecastModel.js` · `server/tests/accuracy.test.js` · `src/pages/ai/DemandSetup.jsx` · `src/pages/ai/ForecastReview.jsx`
+`server/ml/demandForecast.js` · `server/ml/lstmModel.js` · `server/controllers/forecastController.js` · `server/models/forecastModel.js` · `server/__tests__/accuracy.test.js` · `src/pages/ai/DemandSetup.jsx` · `src/pages/ai/ForecastReview.jsx`

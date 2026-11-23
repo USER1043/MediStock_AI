@@ -2,7 +2,8 @@ export default {
   testEnvironment: 'node',
   transform: {},
   moduleFileExtensions: ['js', 'json'],
-  testMatch: ['**/__tests__/**/*.test.js', '**/?(*.)+(spec|test).js'],
+  // Every test lives in __tests__/ and runs on mongodb-memory-server or mocks: none uses MONGODB_URI
+  testMatch: ['<rootDir>/__tests__/**/*.test.js'],
   collectCoverageFrom: [
     'controllers/**/*.js',
     'utils/**/*.js',
