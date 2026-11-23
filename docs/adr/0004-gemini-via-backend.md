@@ -11,10 +11,9 @@ The chatbot originally called the Gemini API from the browser, which meant shipp
 Route all LLM calls through `POST /api/chatbot/query`. The server:
 
 1. Requires a logged-in user (`protect`).
-2. Builds a text snapshot of live inventory and today's sales.
-3. Prepends a system prompt with strict rules (stock only if an active batch exists, give rack numbers, suggest same-category alternatives, no medical advice).
-4. Calls Gemini 2.0 Flash (`temperature 0.3`) with the last 3 exchanges of per-user history.
-5. Falls back to deterministic keyword answers if Gemini fails.
+2. Sends a system instruction with strict rules (stock only if an active batch exists, give rack numbers, suggest same-category alternatives, no medical advice).
+3. Calls Gemini 2.0 Flash (`temperature 0.3`) with the last 3 exchanges of per-user history and read-only inventory tools. The model requests the live data it needs (function calling) and the server runs those queries. *(Updated: this originally injected a text snapshot of the whole inventory into every prompt; see [chatbot.md](../chatbot.md#2-prompt-and-tools).)*
+4. Falls back to deterministic keyword answers if Gemini fails.
 
 `GEMINI_API_KEY` exists only in `server/.env`. `src/utils/geminiAPI.js` is now just a thin client for the backend endpoint.
 

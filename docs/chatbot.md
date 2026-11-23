@@ -1,6 +1,6 @@
 # Voice Assistant (Chatbot)
 
-> **TL;DR** — A floating chat widget (`Chatbot.jsx`) takes typed or spoken questions in **English or Tamil**, sends them to `POST /api/chatbot/query`, and reads the answer aloud. The server builds a **live inventory snapshot**, injects it into a system prompt, and calls **Gemini 2.0 Flash**, keeping the last 3 exchanges per user as memory. If Gemini fails, a **keyword-based fallback** answers from the same data. The API key never leaves the server.
+> **TL;DR** — A floating chat widget (`Chatbot.jsx`) takes typed or spoken questions in **English or Tamil**, sends them to `POST /api/chatbot/query`, and reads the answer aloud. The server calls **Gemini 2.0 Flash** with a short system instruction and five read-only **inventory tools** (function calling): the model asks for only the data a question needs (one medicine, alternatives in a category, low stock, expiring batches, a summary), and the server runs those queries and sends back compact results. The last 3 exchanges per user are kept as memory. If Gemini fails, a **keyword-based fallback** answers from the database. The API key never leaves the server.
 
 ---
 
@@ -23,15 +23,19 @@ sequenceDiagram
         STT-->>W: transcript
     end
     W->>API: POST /api/chatbot/query {message, language}
-    API->>DB: Medicine.find() and today's Bills
-    API->>API: buildInventoryContext() → text snapshot
-    API->>API: buildSystemPrompt(context, language)
+    API->>API: buildSystemPrompt(language) (no inventory data)
     API->>API: load last 6 messages for req.user.id
-    API->>G: generateContent(history + [system context + user message])
-    alt Gemini OK
+    API->>G: generateContent(systemInstruction, history + question, tools)
+    loop up to 4 rounds, while the model asks for tools
+        G-->>API: functionCall(s), e.g. search_medicines {query}
+        API->>DB: runTool(): one small query per call
+        API->>G: functionResponse(s) with compact JSON results
+    end
+    alt Gemini answers in text
         G-->>API: text
-        API->>API: append to history, trim to 6
-    else error / no key / empty
+        API->>API: append question and answer to history, trim to 6
+    else error / no key / empty / still calling tools after 4 rounds
+        API->>DB: Medicine.find()
         API->>API: keywordFallback(message, medicines, language)
     end
     API-->>W: {response, source: gemini | fallback, disclaimer}
@@ -41,24 +45,32 @@ sequenceDiagram
 
 ---
 
-## 2. Prompt construction
+## 2. Prompt and tools
 
-**Inventory context.** Rebuilt on every request from the live database:
+**System instruction** (`buildSystemPrompt`, sent in Gemini's `systemInstruction` field). It carries no inventory data, only today's date (IST) and the directives:
 
-- Summary: total medicines, low-stock count, today's sales total and bill count.
-- One line per medicine: name, category, **active batches** (only `quantity > 0` and not expired) with rack, quantity and expiry, total quantity, and price. A medicine with no active batch is labelled *"Out of Stock / Expired"*.
+1. Never guess stock, prices, racks or dates: look them up with the tools.
+2. A medicine is in stock **only** if it has an active batch (`inStock: true`).
+3. If it's unavailable, call `find_alternatives` with its category and suggest what is in stock.
+4. Always state the **rack number** of the batch to use first (earliest expiry) when confirming stock.
+5. Keep a clinical tone; **no medical advice** (dosage, diagnosis), inventory questions only.
+6. Respond in Tamil or English, following the `language` field.
 
-**System directives** (in `buildSystemPrompt`):
+**Tools** (`server/services/chatbotTools.js`). All are read-only, run one small query, and return at most 15 medicines or batches (with `truncated` and `total` when there are more). Stock and expiry follow the app's shared rules (`utils/stockLevel.js`, `utils/expiry.js`): an **active batch** has stock left and hasn't expired (from 00:00 IST on its expiry day).
 
-1. A medicine is in stock **only** if it has an active batch.
-2. If it's unavailable, suggest in-stock alternatives from the **same category**.
-3. Always state the **rack number** when confirming stock.
-4. Keep a clinical tone; **no medical advice** (dosage, diagnosis), inventory questions only.
-5. Respond in Tamil or English, following the `language` field.
+| Tool | Arguments | Returns |
+|------|-----------|---------|
+| `search_medicines` | `query` (part of the name), optional `category` | Matching medicines: `inStock`, `sellableQuantity`, expired stock still on the shelf, total quantity, reorder level, stock level, price, active batches (batch, rack, quantity, expiry, days left; earliest first) |
+| `find_alternatives` | `category`, optional `exclude` (name) | In-stock medicines of that category, most stock first |
+| `list_low_stock` | — | Medicines at or below their reorder level, most urgent first |
+| `list_expiring_batches` | optional `days` (1–180, default 30) | Batches with stock that have expired or expire within the window, soonest first, with racks |
+| `get_inventory_summary` | — | Counts (medicines, low stock, medicines with expired stock), categories, today's sales (from 00:00 IST) |
+
+**The loop** (`callGeminiAPI`). The model replies either with text (the answer) or with one or more `functionCall`s. The server runs every call (`runTool`, which never throws: an unknown tool or a failed query comes back as `{ error }`), appends the model's turn and the `functionResponse`s, and asks again. After 4 rounds of tool calls without an answer it gives up and the keyword fallback answers. Each tool use is logged (`Chatbot tools used`).
 
 **Generation config:** `temperature 0.3` (factual, low creativity), `maxOutputTokens 600`, `topK 40`, `topP 0.95`.
 
-**How the prompt is sent.** Gemini's `contents` array has no system role here, so the system prompt is prepended to the latest user turn inside `[SYSTEM CONTEXT - HIDDEN FROM USER] … [END SYSTEM]` markers. Earlier turns go in as plain `user` / `model` messages.
+**Request size.** The prompt no longer grows with the catalogue. Measured for "Do we have paracetamol?" against a mocked Gemini: with 12 medicines, the old single request was 3.8 KB and the new two requests total 6.3 KB; with 200 medicines, the old request was 35.8 KB and the new ones still 6.3 KB. The fixed part is mostly the tool declarations. The trade-off is one extra round trip to Gemini for each round of tool calls.
 
 ---
 
@@ -66,7 +78,7 @@ sequenceDiagram
 
 - `userChatHistories`: an in-process `Map<userId, Array<{role, text}>>`.
 - Keeps the last **6 messages** (3 exchanges) per user.
-- Only the plain question and answer are stored, not the inventory snapshot, so memory stays small and each answer uses fresh stock data.
+- Only the plain question and answer are stored, never tool calls or tool results, so memory stays small and each answer looks up fresh stock data.
 
 ---
 
@@ -92,7 +104,7 @@ The response always includes `source` so the UI (and debugging) can tell which p
 
 ## Design decisions
 
-- **Retrieval by context stuffing, not RAG.** A single pharmacy has hundreds, not millions, of SKUs, so the whole inventory fits in the prompt. No vector store or embeddings to maintain, and the answer always reflects live stock.
+- **Retrieval by tool calls, not context stuffing or RAG.** The model asks the database for exactly what a question needs through typed, read-only tools. The prompt stays the same size however large the catalogue gets, there is no vector store to maintain, and answers always reflect live stock.
 - **Server-side proxy for the LLM.** Keeps the key secret, allows auth and auditing, and lets the server add live data. See [ADR-0004](adr/0004-gemini-via-backend.md).
 - **Low temperature and strict directives** to reduce hallucinated stock or rack numbers.
 - **Graceful degradation.** A pharmacy counter can't stall because an external AI is down, so a deterministic fallback always answers.
@@ -100,10 +112,10 @@ The response always includes `source` so the UI (and debugging) can tell which p
 
 ## Known limitations
 
-- **Prompt size grows with the catalogue.** Every request sends *every* medicine. With thousands of SKUs this hits token limits and raises cost and latency.
-- **Two full inventory reads per request.** `Medicine.find()` runs once in the handler (for the fallback) and again inside `buildInventoryContext()`.
+- **Extra round trips.** A question that needs data takes at least two Gemini calls (tool call, then answer). For a very small inventory the old full dump was smaller in bytes, but it grew with every medicine.
+- **Tool results are capped at 15 items**, so a broad question ("everything expiring this year") gets the first 15 and a `truncated` flag.
 - **In-memory history** is lost on restart, isn't shared across instances, and grows with the number of distinct users (no eviction).
-- **Prompt injection.** User text and the system context share one message. A user could try "ignore previous instructions"; the impact is limited to what's already in the prompt (inventory data), but it isn't defended against.
+- **Prompt injection.** A user could try "ignore previous instructions". The tools are read-only inventory queries, so the most a model can be talked into is reading inventory data the user could see in the app anyway.
 - **`safetySettings` are all `BLOCK_NONE`.**
 - **The API key goes in the URL query string** (`?key=`), not the `x-goog-api-key` header.
 - **Keyword fallback is naive**: it matches the first word of each medicine name as a substring, e.g. "para" matches every "Paracetamol …" product.
@@ -111,15 +123,12 @@ The response always includes `source` so the UI (and debugging) can tell which p
 
 ## Future improvements
 
-- **Retrieve before prompting:** extract the medicine or category the user mentions (keyword or embeddings) and include only relevant rows, plus the summary.
-- Use Gemini **function calling** (`getStock(name)`, `getExpiring(days)`), letting the model query the database through typed tools rather than reading a dump.
 - Put chat history in Redis with a TTL.
-- Use the API's `systemInstruction` field instead of inlining the system prompt; send the key in a header; use sensible safety thresholds.
+- Send the key in a header; use sensible safety thresholds.
 - Stream responses to the UI to reduce perceived latency.
-- Cache the inventory context for a few seconds to absorb bursts.
 
 ---
 
 ## Related files
 
-`server/controllers/chatbotController.js` · `server/routes/chatbotRoutes.js` · `src/components/Chatbot.jsx` · `src/utils/geminiAPI.js` · `src/utils/tamilTTS.js`
+`server/controllers/chatbotController.js` · `server/services/chatbotTools.js` · `server/routes/chatbotRoutes.js` · `src/components/Chatbot.jsx` · `src/utils/geminiAPI.js` · `src/utils/tamilTTS.js`

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { Medicine } from '../models/medicineModel.js';
-import { Bill } from '../models/billModel.js';
-import { isNearExpiry, isExpired } from '../utils/helpers.js';
+import { isNearExpiry } from '../utils/helpers.js';
+import { runTool, TOOL_DECLARATIONS } from '../services/chatbotTools.js';
 import log from '../utils/logger.js';
 import { isMedicineLowStock } from '../utils/stockLevel.js';
 
@@ -12,108 +12,88 @@ const GEMINI_API_URL =
 
 const userChatHistories = new Map(); // Store conversation memory per user
 
-/**
- * Fetch a live snapshot of the inventory and format it as a readable context block.
- */
-const buildInventoryContext = async () => {
-  const medicines = await Medicine.find().lean();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayBills = await Bill.find({ createdAt: { $gte: today } }).lean();
-  const todaySales = todayBills.reduce((s, b) => s + b.grandTotal, 0);
-
-  const lowStock = medicines.filter(isMedicineLowStock);
-  const nearExpiry = medicines.filter(m => m.batches && m.batches.some(b => isNearExpiry(b.expiryDate, 30)));
-  const expired = medicines.filter(m => m.batches && m.batches.some(b => isExpired(b.expiryDate)));
-
-  const medicineList = medicines.map(m => {
-    // SCHEMA-AWARE: Only consider batches with quantity > 0 AND expiryDate > today
-    const activeBatches = (m.batches || []).filter(b => b.quantity > 0 && new Date(b.expiryDate) > new Date());
-
-    let batchInfo = 'Status: Out of Stock / Expired';
-    if (activeBatches.length > 0) {
-      batchInfo = 'Active Batches: ' + activeBatches.map(b => `[Rack: ${b.rackNumber || 'N/A'}, Qty: ${b.quantity}, Exp: ${new Date(b.expiryDate).toLocaleDateString()}]`).join(', ');
-    }
-
-    return `• Name: ${m.name} | Category: ${m.category || 'N/A'} | ${batchInfo} | Total Qty: ${m.quantity} | Price: ₹${m.sellingPrice}`;
-  }).join('\n');
-
-  return `
-=== LIVE PHARMACY INVENTORY DATA (as of ${new Date().toLocaleString('en-IN')}) ===
-
-SUMMARY:
-- Total medicines: ${medicines.length}
-- Low stock: ${lowStock.length}
-- Today's sales: ₹${todaySales.toFixed(2)} across ${todayBills.length} bill(s)
-
-FULL MEDICINE LIST WITH VERIFIED BATCHES & RACK NUMBERS:
-${medicineList || 'No medicines in inventory.'}
-===
-`;
-};
+/** The model may ask for tools this many times per question before it must answer. */
+export const MAX_TOOL_ROUNDS = 4;
 
 /**
- * Build the system prompt with live inventory injected.
+ * The system instruction. It holds no inventory data: the model looks up what each question needs
+ * with the tools in services/chatbotTools.js.
  */
-const buildSystemPrompt = (inventoryContext, language) => {
-  const langInstruction = language === 'ta'
-    ? 'Respond in Tamil language.'
-    : 'Respond in English.';
+export const buildSystemPrompt = (language, now = new Date()) => {
+  const langInstruction = language === 'ta' ? 'Respond in Tamil language.' : 'Respond in English.';
 
-  return `You are MediStock AI, an intelligent, clinical, and highly professional Context-Aware Inventory Assistant for pharmacists.
+  return `You are MediStock AI, a clinical and professional inventory assistant for pharmacists.
+Today is ${now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'long', day: 'numeric' })} (IST).
 
 CORE DIRECTIVES:
-1. SCHEMA-AWARE VERIFICATION: A medicine is ONLY considered "in stock" if the 'Active Batches' property explicitly lists a batch (meaning Qty > 0 and Expiry > Today). If a medicine says "Status: Out of Stock / Expired", you MUST tell the user it is locally unavailable.
-2. PROACTIVE ASSISTANCE: If the requested item is expired or out of stock, YOU MUST proactively search the live inventory list for other available medicines with the EXACT SAME Category and suggest them as alternatives.
-3. VERIFY RACK NUMBERS: Whenever confirming stock for a medicine, ALWAYS extract and provide the Rack Number from the Active Batches text so the pharmacist knows exactly where to retrieve it.
-4. CLINICAL TONE: Maintain a professional, polite, and clinical tone at all times. Do NOT provide medical advice (dosage, diagnosis). Only discuss inventory.
-5. ${langInstruction}
+1. USE THE TOOLS: Never guess stock, prices, racks or dates. Look them up with the tools before answering; if a tool finds nothing, say so.
+2. STOCK RULE: A medicine is in stock ONLY if it has at least one active batch (inStock: true). Otherwise tell the user it is locally unavailable.
+3. ALTERNATIVES: If a requested medicine is unavailable, call find_alternatives with its category and suggest what is in stock.
+4. RACK NUMBERS: When confirming stock, always give the rack number of the active batch to use first (earliest expiry).
+5. CLINICAL TONE: Do NOT give medical advice (dosage, diagnosis). Only discuss inventory.
+6. ${langInstruction}`;
+};
 
-${inventoryContext}
-`;
+// Text of a model reply (all text parts joined), or null
+const replyText = (content) => {
+  const text = (content?.parts || []).map((p) => p.text || '').join('').trim();
+  return text || null;
 };
 
 /**
- * Call Gemini API with the full context prompt.
+ * Calls Gemini with the inventory tools and runs the tool calls it asks for, until it answers in text.
+ * Returns { text, toolCalls } where toolCalls lists the tool names used, in order.
  */
-const callGeminiAPI = async (systemPrompt, chatHistory, userMessage) => {
+export const callGeminiAPI = async (systemPrompt, chatHistory, userMessage, now = new Date()) => {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY is not configured on the server');
   }
 
-  // Convert tracked chat history into Gemini format
-  const contents = chatHistory.map(turn => ({
-    role: turn.role, // 'user' or 'model'
-    parts: [{ text: turn.text }]
-  }));
+  // Earlier turns are plain text; the current question goes last
+  const contents = chatHistory.map((turn) => ({ role: turn.role, parts: [{ text: turn.text }] }));
+  contents.push({ role: 'user', parts: [{ text: userMessage }] });
 
-  // Append current user message with hidden background system context
-  contents.push({
-    role: 'user',
-    parts: [{ text: `[SYSTEM CONTEXT - HIDDEN FROM USER]\n${systemPrompt}\n[END SYSTEM]\n\nUser Message: ${userMessage}` }]
-  });
-
-  const { data } = await axios.post(
-    `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
-    {
-      contents,
-      generationConfig: {
-        temperature: 0.3,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 600,
+  const toolCalls = [];
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const { data } = await axios.post(
+      `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
+      {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [...contents], // a copy: the loop keeps appending to `contents`
+        tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+        toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+        generationConfig: {
+          temperature: 0.3,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 600,
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+        ],
       },
-      safetySettings: [
-        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-      ],
-    },
-    { headers: { 'Content-Type': 'application/json' } }
-  );
+      { headers: { 'Content-Type': 'application/json' } }
+    );
 
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    const content = data?.candidates?.[0]?.content;
+    const calls = (content?.parts || []).filter((p) => p.functionCall).map((p) => p.functionCall);
+    if (calls.length === 0) return { text: replyText(content), toolCalls };
+    if (round === MAX_TOOL_ROUNDS) break;
+
+    // Keep the model's turn as sent (it may carry signatures Gemini expects back), then answer every call
+    contents.push(content);
+    const responses = [];
+    for (const call of calls) {
+      toolCalls.push(call.name);
+      responses.push({ functionResponse: { name: call.name, response: await runTool(call.name, call.args, now) } });
+    }
+    contents.push({ role: 'user', parts: responses });
+  }
+
+  throw new Error(`No answer after ${MAX_TOOL_ROUNDS} rounds of tool calls`);
 };
 
 /**
@@ -160,22 +140,21 @@ export const chatbotQuery = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Message is required' });
     }
 
-    // Always fetch live inventory
-    const medicines = await Medicine.find().lean();
     let response = null;
     let source = 'gemini';
 
     try {
-      const inventoryContext = await buildInventoryContext();
-      const systemPrompt = buildSystemPrompt(inventoryContext, language);
+      const systemPrompt = buildSystemPrompt(language);
 
       // Pull history for the user session (fallback to 'default' if no user session middleware hooked up yet)
       const userId = req.user?.id || 'default_user';
       let history = userChatHistories.get(userId) || [];
 
-      response = await callGeminiAPI(systemPrompt, history, message);
+      const result = await callGeminiAPI(systemPrompt, history, message);
+      response = result.text;
+      if (result.toolCalls.length > 0) log('INFO', 'Chatbot tools used', { tools: result.toolCalls });
 
-      // Update Conversation Memory (keep only last 3 turns = 6 messages)
+      // Update Conversation Memory (keep only last 3 turns = 6 messages); text only, never tool data
       history.push({ role: 'user', text: message });
       history.push({ role: 'model', text: response || 'I encountered an error processing that.' });
 
@@ -189,6 +168,8 @@ export const chatbotQuery = async (req, res) => {
     }
 
     if (!response) {
+      // Only the fallback needs the whole list
+      const medicines = await Medicine.find().lean();
       response = keywordFallback(message, medicines, language);
       source = 'fallback';
     }
